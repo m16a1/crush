@@ -700,13 +700,20 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		return nil, fmt.Errorf("failed to get session messages: %w", err)
 	}
 
-	// Generate title from the first real (non-shell) user prompt.
-	// can take tens of seconds. Blocking Run on it delays the
-	// response to the caller. Use a detached context so the title
-	// goroutine survives Run's cancel.
+	// Generate a title from the first real (non-shell) user prompt.
+	// The request is issued only once this turn's own request has
+	// ended: some models serve a single request at a time, and asking
+	// for the title up front raced the turn, so the title call failed
+	// and the session stayed on the fallback name. Deferring it also
+	// keeps a slow title request from blocking Run's return, and the
+	// detached context lets the goroutine survive Run's cancel.
 	if !hasUserTextMessage(msgs) {
-		titleCtx := context.WithoutCancel(ctx)
-		go a.GenerateTitle(titleCtx, call.SessionID, call.Prompt)
+		titlePrompt := call.Prompt
+		titleSessionID := call.SessionID
+		defer func() {
+			titleCtx := context.WithoutCancel(ctx)
+			go a.GenerateTitle(titleCtx, titleSessionID, titlePrompt)
+		}()
 	}
 
 	// Add the user message to the session.
