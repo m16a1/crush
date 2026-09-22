@@ -33,22 +33,41 @@ func timedAssistantMessage(id string) *message.Message {
 	}
 }
 
-func TestAssistantInfoItemShowsGenerationMetrics(t *testing.T) {
-	sty := styles.CharmtonePantera()
-	msg := timedAssistantMessage("a1")
+// timedAssistantMessageWithUsage returns an assistant message that ended the
+// turn and carries the token usage the provider reported for it.
+func timedAssistantMessageWithUsage(id string, promptTokens, completionTokens int64) *message.Message {
+	msg := timedAssistantMessage(id)
+	msg.SetFinishUsage(promptTokens, completionTokens)
+	return msg
+}
 
-	common.StartTurn()
-	t.Cleanup(common.StopTurn)
-	common.StartStep(msg.ID)
+// measureTestStep times a step of the given message over a real generation
+// window, which is what the decode speed needs.
+func measureTestStep(id string, tokens int64) {
+	common.StartStep(id)
 	common.MarkFirstToken()
 	time.Sleep(2 * time.Millisecond)
 	common.MarkStepFinished()
-	common.FinishStep(120)
+	common.FinishStep(12_300, tokens)
+}
+
+func TestAssistantInfoItemShowsGenerationMetrics(t *testing.T) {
+	sty := styles.CharmtonePantera()
+	msg := timedAssistantMessageWithUsage("a1", 12_300, 456)
+
+	common.StartTurn()
+	t.Cleanup(common.StopTurn)
+	common.ResetMetrics()
+	t.Cleanup(common.ResetMetrics)
+	measureTestStep(msg.ID, 120)
 
 	item := NewAssistantInfoItem(&sty, msg, metricsTestConfig(), time.Unix(1735689590, 0))
 	rendered := ansi.Strip(item.Render(120))
 	require.Contains(t, rendered, "ttft ")
-	require.Contains(t, rendered, "tok/s")
+	require.Contains(t, rendered, "tps")
+	require.Contains(t, rendered, "↑12.3K")
+	require.Contains(t, rendered, "↓456")
+	require.NotContains(t, rendered, "avg", "the footer reports one response, not the session average")
 }
 
 func TestAssistantInfoItemOmitsMetricsForUntimedMessages(t *testing.T) {
@@ -56,13 +75,31 @@ func TestAssistantInfoItemOmitsMetricsForUntimedMessages(t *testing.T) {
 
 	common.StartTurn()
 	t.Cleanup(common.StopTurn)
+	common.ResetMetrics()
+	t.Cleanup(common.ResetMetrics)
 	common.StartStep("a1")
 	common.MarkFirstToken()
 
 	item := NewAssistantInfoItem(&sty, timedAssistantMessage("a2"), metricsTestConfig(), time.Unix(1735689590, 0))
 	rendered := ansi.Strip(item.Render(120))
 	require.NotContains(t, rendered, "ttft ")
-	require.NotContains(t, rendered, "tok/s")
+	require.NotContains(t, rendered, "tps")
+}
+
+func TestAssistantInfoItemShowsTokenCountsAfterAReload(t *testing.T) {
+	sty := styles.CharmtonePantera()
+
+	// A session reopened in a fresh process has no timings, but the counts
+	// stored on the message are still there.
+	common.ResetMetrics()
+	t.Cleanup(common.ResetMetrics)
+
+	msg := timedAssistantMessageWithUsage("a-replay", 12_300, 456)
+	item := NewAssistantInfoItem(&sty, msg, metricsTestConfig(), time.Unix(1735689590, 0))
+	rendered := ansi.Strip(item.Render(120))
+	require.Contains(t, rendered, "↑12.3K")
+	require.Contains(t, rendered, "↓456")
+	require.NotContains(t, rendered, "ttft ")
 }
 
 func TestAssistantInfoItemTrimsMetricsToAvailableWidth(t *testing.T) {
@@ -70,49 +107,47 @@ func TestAssistantInfoItemTrimsMetricsToAvailableWidth(t *testing.T) {
 
 	common.StartTurn()
 	t.Cleanup(common.StopTurn)
-	// Two steps so the turn average is available too.
-	for _, id := range []string{"a-width-1", "a-width-2"} {
-		common.StartStep(id)
-		common.MarkFirstToken()
-		time.Sleep(2 * time.Millisecond)
-		common.MarkStepFinished()
-		common.FinishStep(500)
-	}
-	msg := timedAssistantMessage("a-width-2")
+	common.ResetMetrics()
+	t.Cleanup(common.ResetMetrics)
+	measureTestStep("a-width", 500)
+	msg := timedAssistantMessageWithUsage("a-width", 12_300, 456)
 
 	render := func(width int) string {
 		item := NewAssistantInfoItem(&sty, msg, metricsTestConfig(), time.Unix(1735689590, 0))
 		return ansi.Strip(item.Render(width))
 	}
 
-	require.Contains(t, render(100), "avg ", "a wide footer keeps every measurement")
-	require.NotContains(t, render(60), "avg ", "the average is dropped first")
-	require.Contains(t, render(60), "tok/s")
-	require.Contains(t, render(44), "ttft ", "the time to first token outlives the rate")
-	require.NotContains(t, render(44), "tok/s", "the rate is dropped rather than cut in half")
-	require.NotContains(t, render(30), "ttft ", "no metrics when there is no room at all")
+	require.Contains(t, render(120), "tps", "a wide footer keeps every measurement")
+	require.Contains(t, render(120), "↓456")
+
+	require.NotContains(t, render(64), "tps", "the decode speed is dropped first")
+	require.Contains(t, render(64), "ttft ")
+	require.Contains(t, render(64), "↑12.3K", "the token counts outlive the timings")
+
+	require.NotContains(t, render(52), "ttft ", "then the time to first token goes")
+	require.Contains(t, render(52), "↓456")
+
+	require.NotContains(t, render(36), "↓456", "no metrics when there is no room at all")
 }
 
 func TestAssistantInfoItemRefreshesMetricsAfterInvalidation(t *testing.T) {
 	sty := styles.CharmtonePantera()
-	msg := timedAssistantMessage("a-refresh")
+	msg := timedAssistantMessageWithUsage("a-refresh", 12_300, 456)
 
 	common.StartTurn()
 	t.Cleanup(common.StopTurn)
+	common.ResetMetrics()
+	t.Cleanup(common.ResetMetrics)
 
 	item := NewAssistantInfoItem(&sty, msg, metricsTestConfig(), time.Unix(1735689590, 0)).(*AssistantInfoItem)
-	require.NotContains(t, ansi.Strip(item.Render(120)), "tok/s")
+	require.NotContains(t, ansi.Strip(item.Render(120)), "tps")
 
 	// The step is timed after the footer was first drawn, as happens when the
 	// session usage lands after the finish part.
-	common.StartStep(msg.ID)
-	common.MarkFirstToken()
-	time.Sleep(2 * time.Millisecond)
-	common.MarkStepFinished()
-	common.FinishStep(120)
+	measureTestStep(msg.ID, 120)
 	item.InvalidateMetrics()
 
 	rendered := ansi.Strip(item.Render(120))
-	require.Contains(t, rendered, "ttft ")
-	require.Contains(t, rendered, "tok/s")
+	require.Contains(t, rendered, "tps")
+	require.Contains(t, rendered, "↑12.3K")
 }

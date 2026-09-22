@@ -59,10 +59,10 @@ func (m *UI) modelInfo(width int) string {
 	}
 	info := common.ModelInfo(m.com.Styles, modelName, providerName, reasoningInfo, modelContext, width, m.hyperCredits)
 
-	// Generation timings (time to first token and throughput) sit under the
-	// token/cost line while a turn streams and stay for the last timed turn.
-	// The sidebar is narrow, so the status wraps onto a second line rather
-	// than being cut off.
+	// The session's average time to first token and decode speed sit under the
+	// token/cost line. They are always reported, as "-" until the session has
+	// measured something, and the sidebar is narrow, so the average status
+	// wraps onto a second line rather than being cut off.
 	if status := common.MetricsStatusLines(width - 2); len(status) > 0 {
 		lines := make([]string, 0, len(status)+1)
 		lines = append(lines, info)

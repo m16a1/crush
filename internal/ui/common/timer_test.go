@@ -10,135 +10,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var tpsPattern = regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?) tok/s`)
-var avgPattern = regexp.MustCompile(`avg ([0-9]+(?:\.[0-9]+)?) tok/s`)
+// tpsPattern matches the decode speed of a formatted metrics string.
+var tpsPattern = regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?) tps`)
 
-// resetTracker clears the package-level tracker between tests so cases do not
+// sidebarPattern matches the average status line the sidebar renders.
+var sidebarPattern = regexp.MustCompile(`^avg: ttft (\S+) · ([0-9.]+) tps$`)
+
+// resetTracker clears the process-wide tracker between tests so cases do not
 // leak timings into each other.
 func resetTracker() {
-	turnTimer.mu.Lock()
-	defer turnTimer.mu.Unlock()
-	turnTimer.active = false
-	turnTimer.stepMessageID = ""
-	turnTimer.firstTokenTime = time.Time{}
-	turnTimer.stepFinishedAt = time.Time{}
-	turnTimer.totalTokens = 0
-	turnTimer.totalWindow = 0
-	turnTimer.totalSteps = 0
-	turnTimer.steps = nil
-	turnTimer.order = nil
+	ResetMetrics()
+	StopTurn()
 }
 
-// tpsOf extracts the throughput from a formatted metrics string.
+// tpsOf extracts the decode speed from a formatted metrics string.
 func tpsOf(t *testing.T, metrics string) float64 {
 	t.Helper()
 	match := tpsPattern.FindStringSubmatch(metrics)
-	require.Len(t, match, 2, "no throughput in %q", metrics)
+	require.Len(t, match, 2, "no decode speed in %q", metrics)
 	value, err := strconv.ParseFloat(match[1], 64)
 	require.NoError(t, err)
 	return value
 }
 
-func TestMetricsStatusReportsElapsedBeforeFirstToken(t *testing.T) {
-	resetTracker()
-	t.Cleanup(resetTracker)
-
-	StartTurn()
-	status := MetricsStatus()
-	require.Contains(t, status, "0s")
-	require.NotContains(t, status, "ttft")
-}
-
-func TestMetricsStatusStopsReportingElapsedWhenTurnEnds(t *testing.T) {
-	resetTracker()
-	t.Cleanup(resetTracker)
-
-	StartTurn()
-	StartStep("m1")
-	MarkFirstToken()
-	StopTurn()
-
-	require.Regexp(t, `^ttft [0-9]+ms$`, MetricsStatus())
-}
-
-func TestMarkFirstTokenRecordsTimeToFirstToken(t *testing.T) {
-	resetTracker()
-	t.Cleanup(resetTracker)
-
-	StartTurn()
-	StartStep("m1")
-	require.Empty(t, MetricsFor("m1"), "no metrics before the first token")
-
-	MarkFirstToken()
-	metrics := MetricsFor("m1")
-	require.Regexp(t, `^ttft [0-9]+(ms|[0-9.]+s)$`, metrics)
-	require.NotContains(t, metrics, "tok/s", "throughput needs the step to finish")
-}
-
-func TestFinishStepDerivesThroughputFromFrozenWindow(t *testing.T) {
-	resetTracker()
-	t.Cleanup(resetTracker)
-
-	StartTurn()
-	StartStep("m1")
-	MarkFirstToken()
-	time.Sleep(2 * time.Millisecond)
-	MarkStepFinished()
-	FinishStep(100)
-	first := tpsOf(t, MetricsFor("m1"))
-
-	// A later, more accurate count must refine the rate without stretching the
-	// generation window.
-	FinishStep(200)
-	require.InDelta(t, first*2, tpsOf(t, MetricsFor("m1")), 1)
-}
-
-func TestFinishStepIsIgnoredBeforeTheStepFinishes(t *testing.T) {
-	resetTracker()
-	t.Cleanup(resetTracker)
-
-	StartTurn()
-	StartStep("m1")
-	MarkFirstToken()
-	FinishStep(500)
-
-	require.NotContains(t, MetricsFor("m1"), "tok/s")
-}
-
-func TestFinishStepIgnoresInstantSteps(t *testing.T) {
-	resetTracker()
-	t.Cleanup(resetTracker)
-
-	// A response that arrives in one piece has no meaningful generation window,
-	// so it reports no throughput instead of an absurd rate.
-	StartTurn()
-	StartStep("m1")
-	MarkFirstToken()
-	MarkStepFinished()
-	FinishStep(500)
-
-	require.NotContains(t, MetricsFor("m1"), "tok/s")
-}
-
-func TestFinishStepIgnoresEmptyUsage(t *testing.T) {
-	resetTracker()
-	t.Cleanup(resetTracker)
-
-	StartTurn()
-	StartStep("m1")
-	MarkFirstToken()
-	MarkStepFinished()
-	FinishStep(0)
-
-	require.NotContains(t, MetricsFor("m1"), "tok/s")
-}
-
-// avgOf extracts the running average from a formatted metrics string.
-func avgOf(t *testing.T, metrics string) float64 {
+// sidebarStatus returns the average status line the sidebar renders.
+func sidebarStatus(t *testing.T) string {
 	t.Helper()
-	match := avgPattern.FindStringSubmatch(metrics)
-	require.Len(t, match, 2, "no average throughput in %q", metrics)
-	value, err := strconv.ParseFloat(match[1], 64)
+	lines := MetricsStatusLines(200)
+	require.Len(t, lines, 1)
+	return lines[0]
+}
+
+// averageTPSOf extracts the average decode speed from the sidebar status.
+func averageTPSOf(t *testing.T) float64 {
+	t.Helper()
+	match := sidebarPattern.FindStringSubmatch(sidebarStatus(t))
+	require.Len(t, match, 3, "sidebar status does not match: %q", sidebarStatus(t))
+	value, err := strconv.ParseFloat(match[2], 64)
 	require.NoError(t, err)
 	return value
 }
@@ -151,7 +59,106 @@ func measureStep(t *testing.T, messageID string, tokens int64, window time.Durat
 	MarkFirstToken()
 	time.Sleep(window)
 	MarkStepFinished()
-	FinishStep(tokens)
+	FinishStep(0, tokens)
+}
+
+func TestMetricsStatusReportsElapsedBeforeAnythingIsMeasured(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	status := MetricsStatus()
+	require.Contains(t, status, "0s", "the turn timer is live")
+	require.Contains(t, status, "ttft -", "no time to first token yet")
+	require.Contains(t, status, "- tps", "no decode speed yet")
+	require.Contains(t, status, "↑-", "no input tokens yet")
+	require.Contains(t, status, "↓-", "no output tokens yet")
+}
+
+func TestMetricsStatusKeepsTheElapsedTimeWhenTheTurnEnds(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	MarkFirstToken()
+	StopTurn()
+
+	require.Regexp(t, `^ttft [0-9]+ms`, MetricsStatus())
+}
+
+func TestMarkFirstTokenRecordsTimeToFirstToken(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	require.Empty(t, MetricsForWidth("m1", 0, 0, 200), "no metrics before the first token")
+
+	MarkFirstToken()
+	metrics := MetricsForWidth("m1", 0, 0, 200)
+	require.Regexp(t, `^ttft [0-9]+(ms|[0-9.]+s)$`, metrics)
+	require.NotContains(t, metrics, "tps", "the decode speed needs the step to finish")
+}
+
+func TestFinishStepDerivesThroughputFromFrozenWindow(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	MarkFirstToken()
+	time.Sleep(2 * time.Millisecond)
+	MarkStepFinished()
+	FinishStep(0, 100)
+	first := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
+
+	// A later, more accurate count must refine the rate without stretching the
+	// generation window.
+	FinishStep(0, 200)
+	require.InDelta(t, first*2, tpsOf(t, MetricsForWidth("m1", 0, 0, 200)), 1)
+}
+
+func TestFinishStepRecordsTheTokenCounts(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	MarkFirstToken()
+	time.Sleep(2 * time.Millisecond)
+	MarkStepFinished()
+	FinishStep(12_300, 456)
+
+	require.Contains(t, MetricsStatus(), "↑12.3K")
+	require.Contains(t, MetricsStatus(), "↓456")
+}
+
+func TestFinishStepIsIgnoredBeforeTheStepFinishes(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	MarkFirstToken()
+	FinishStep(0, 500)
+
+	require.NotContains(t, MetricsForWidth("m1", 0, 0, 200), "tps")
+}
+
+func TestFinishStepIgnoresInstantSteps(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	// A response that arrives in one piece has no meaningful generation window,
+	// so it reports no throughput instead of an absurd rate.
+	StartTurn()
+	StartStep("m1")
+	MarkFirstToken()
+	MarkStepFinished()
+	FinishStep(0, 500)
+
+	require.NotContains(t, MetricsForWidth("m1", 0, 0, 200), "tps")
 }
 
 func TestAverageThroughputIsReportedFromTheFirstStep(t *testing.T) {
@@ -163,37 +170,37 @@ func TestAverageThroughputIsReportedFromTheFirstStep(t *testing.T) {
 
 	// The average is the session's, so it is available as soon as a step has
 	// been measured rather than waiting for a second step.
-	require.InDelta(t, tpsOf(t, MetricsFor("m1")), avgOf(t, MetricsFor("m1")), 1)
+	require.InDelta(t, tpsOf(t, MetricsForWidth("m1", 0, 0, 200)), averageTPSOf(t), 1)
 }
 
-func TestAverageThroughputCoversEveryMeasuredStep(t *testing.T) {
+func TestAverageThroughputIsTheMeanOfStepRates(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
 	StartTurn()
-	measureStep(t, "m1", 100, 4*time.Millisecond)
-	measureStep(t, "m2", 100, 4*time.Millisecond)
+	measureStep(t, "m1", 4, 20*time.Millisecond)
+	measureStep(t, "m2", 4, 2*time.Millisecond)
 
-	// Both steps generated the same number of tokens over the same window, so
-	// the average lands on the individual rates.
-	stepRate := tpsOf(t, MetricsFor("m2"))
-	average := avgOf(t, MetricsFor("m2"))
-	require.InDelta(t, stepRate, average, stepRate*0.2)
-	require.InDelta(t, tpsOf(t, MetricsFor("m1")), average, average*0.2)
+	slow := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
+	fast := tpsOf(t, MetricsForWidth("m2", 0, 0, 200))
+	average := averageTPSOf(t)
+
+	// Every step carries the same weight, however long it took. Weighting by
+	// generation time instead would drag the average towards the slow step.
+	require.InDelta(t, (slow+fast)/2, average, 1)
 }
 
-func TestAverageThroughputWeightsLongerSteps(t *testing.T) {
+func TestAverageTimeToFirstTokenCoversEveryMeasuredStep(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
 	StartTurn()
 	measureStep(t, "m1", 100, 2*time.Millisecond)
+	first := sidebarStatus(t)
 
-	// A much longer, slower step pulls the average down.
-	measureStep(t, "m2", 100, 20*time.Millisecond)
-
-	average := avgOf(t, MetricsFor("m2"))
-	require.Less(t, average, tpsOf(t, MetricsFor("m1")), "the slower step pulls the average down")
+	measureStep(t, "m2", 100, 2*time.Millisecond)
+	require.NotEqual(t, first, sidebarStatus(t), "the second step joins the average")
+	require.Regexp(t, `^avg: ttft [0-9.]+(ms|s) · `, sidebarStatus(t))
 }
 
 func TestAverageThroughputIsRefinedNotDuplicated(t *testing.T) {
@@ -203,16 +210,22 @@ func TestAverageThroughputIsRefinedNotDuplicated(t *testing.T) {
 	StartTurn()
 	measureStep(t, "m1", 100, 2*time.Millisecond)
 	measureStep(t, "m2", 100, 2*time.Millisecond)
-	before := avgOf(t, MetricsFor("m2"))
+	before := averageTPSOf(t)
+	first := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
 
 	// A refined count for a step that already contributed must replace its
-	// share of the session totals rather than add to them: the step's window is
-	// unchanged, so doubling its tokens scales the contributions to 300/200.
-	FinishStep(200)
-	after := avgOf(t, MetricsFor("m2"))
+	// share of the average rather than add to it, so the mean still covers
+	// exactly two steps: the untouched one and the refined one.
+	FinishStep(0, 200)
+	refined := tpsOf(t, MetricsForWidth("m2", 0, 0, 200))
+	after := averageTPSOf(t)
 
 	require.Greater(t, after, before)
-	require.InDelta(t, before*1.5, after, 1)
+	require.InDelta(t, (first+refined)/2, after, 2)
+
+	// Counting the refined step twice would leave the mean diluted by its
+	// earlier, slower rate instead.
+	require.Greater(t, after, (first+refined/2+refined)/3+2)
 }
 
 func TestAverageThroughputCarriesAcrossTurns(t *testing.T) {
@@ -221,16 +234,15 @@ func TestAverageThroughputCarriesAcrossTurns(t *testing.T) {
 
 	StartTurn()
 	measureStep(t, "m1", 100, 2*time.Millisecond)
-	firstTurnRate := tpsOf(t, MetricsFor("m1"))
+	firstRate := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
 
 	StartTurn()
 	measureStep(t, "m2", 100, 20*time.Millisecond)
 
-	average := avgOf(t, MetricsFor("m2"))
-	require.Less(t, average, firstTurnRate, "earlier steps stay in the running average")
+	require.Less(t, averageTPSOf(t), firstRate, "earlier steps stay in the running average")
 
-	// The finished turn keeps the average as it was when it finished.
-	require.InDelta(t, firstTurnRate, avgOf(t, MetricsFor("m1")), 1)
+	// The finished step keeps the timings it had when it finished.
+	require.InDelta(t, firstRate, tpsOf(t, MetricsForWidth("m1", 0, 0, 200)), 1)
 }
 
 func TestMetricsAreScopedToTheTimedMessage(t *testing.T) {
@@ -241,18 +253,18 @@ func TestMetricsAreScopedToTheTimedMessage(t *testing.T) {
 	StartStep("m1")
 	MarkFirstToken()
 	MarkStepFinished()
-	FinishStep(120)
+	FinishStep(0, 120)
 
-	require.NotEmpty(t, MetricsFor("m1"))
-	require.Empty(t, MetricsFor("m2"), "another message never inherits timings")
-	require.Empty(t, MetricsFor(""), "an empty message id has no timings")
+	require.NotEmpty(t, MetricsForWidth("m1", 0, 0, 200))
+	require.Empty(t, MetricsForWidth("m2", 0, 0, 200), "another message never inherits timings")
+	require.Empty(t, MetricsForWidth("", 0, 0, 200), "an empty message id has no timings")
 	require.True(t, TrackedStep("m1"))
 	require.False(t, TrackedStep("m2"))
 
 	StartStep("m2")
 	require.False(t, TrackedStep("m1"), "starting a step stops tracking the previous one")
 	require.True(t, TrackedStep("m2"))
-	require.NotEmpty(t, MetricsFor("m1"), "finished steps keep their timings")
+	require.NotEmpty(t, MetricsForWidth("m1", 0, 0, 200), "finished steps keep their timings")
 }
 
 func TestStartTurnDoesNotTimeUntrackedMessages(t *testing.T) {
@@ -262,9 +274,9 @@ func TestStartTurnDoesNotTimeUntrackedMessages(t *testing.T) {
 	StartTurn()
 	MarkFirstToken()
 	MarkStepFinished()
-	FinishStep(120)
+	FinishStep(0, 120)
 
-	require.Empty(t, MetricsFor("m1"), "tokens are only timed for tracked steps")
+	require.Empty(t, MetricsForWidth("m1", 0, 0, 200), "tokens are only timed for tracked steps")
 }
 
 func TestTrackedStepsAreBounded(t *testing.T) {
@@ -277,23 +289,15 @@ func TestTrackedStepsAreBounded(t *testing.T) {
 		MarkFirstToken()
 	}
 
-	require.Empty(t, MetricsFor("0"), "the oldest step is evicted")
-	require.NotEmpty(t, MetricsFor(strconv.Itoa(maxTrackedSteps+9)))
+	require.Empty(t, MetricsForWidth("0", 0, 0, 200), "the oldest step is evicted")
+	require.NotEmpty(t, MetricsForWidth(strconv.Itoa(maxTrackedSteps+9), 0, 0, 200))
 }
 
-func TestFormatMetricsOmitsMissingThroughput(t *testing.T) {
-	require.Equal(t, "ttft 420ms", formatMetrics(stepMetrics{ttft: 420 * time.Millisecond}))
-	require.Equal(t, "ttft 1.20s · 58.3 tok/s", formatMetrics(stepMetrics{ttft: 1200 * time.Millisecond, tps: 58.3, hasTPS: true}))
-	require.Equal(t, "ttft 12.5s · 120 tok/s", formatMetrics(stepMetrics{ttft: 12500 * time.Millisecond, tps: 120, hasTPS: true}))
-	require.Equal(t, "ttft 1.20s · 58.3 tok/s · avg 54.2 tok/s",
-		formatMetrics(stepMetrics{ttft: 1200 * time.Millisecond, tps: 58.3, hasTPS: true, avgTPS: 54.2, hasAvg: true}))
-}
-
-func TestMetricsStatusLinesAreEmptyWithoutTimings(t *testing.T) {
+func TestMetricsStatusLinesAlwaysReportBothAverages(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
-	require.Empty(t, MetricsStatusLines(30))
+	require.Equal(t, []string{"avg: ttft - · - tps"}, MetricsStatusLines(30))
 }
 
 func TestMetricsStatusLinesKeepsOneLineWhenItFits(t *testing.T) {
@@ -304,60 +308,123 @@ func TestMetricsStatusLinesKeepsOneLineWhenItFits(t *testing.T) {
 	measureStep(t, "m1", 100, 2*time.Millisecond)
 	measureStep(t, "m2", 100, 2*time.Millisecond)
 
-	full := MetricsStatus()
 	lines := MetricsStatusLines(200)
 	require.Len(t, lines, 1)
-	require.Equal(t, full, lines[0])
+	require.Regexp(t, `^avg: ttft [0-9.]+(ms|s) · [0-9.]+ tps$`, lines[0])
 }
 
-func TestMetricsStatusLinesSplitsInsteadOfDroppingOnNarrowColumns(t *testing.T) {
+func TestMetricsStatusLinesWrapInsteadOfDropping(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
 	StartTurn()
-	// Slow steps keep the throughput numbers short, like real generation does.
-	measureStep(t, "m1", 4, 50*time.Millisecond)
-	measureStep(t, "m2", 4, 50*time.Millisecond)
-
-	// The sidebar is 32 columns wide, which cannot hold the whole status.
-	lines := MetricsStatusLines(28)
-	require.Len(t, lines, 2)
-	require.Contains(t, lines[0], "ttft ", "the turn timing keeps its own line")
-	require.Contains(t, lines[1], "tok/s")
-	require.Contains(t, lines[1], "avg ", "a realistic rate and average fit the second line")
-	for _, line := range lines {
-		require.LessOrEqual(t, lipgloss.Width(line), 28, "status lines must fit the column")
-	}
-}
-
-func TestMetricsStatusLinesShedsTheAverageOnVeryNarrowColumns(t *testing.T) {
-	resetTracker()
-	t.Cleanup(resetTracker)
-
-	StartTurn()
+	// Slow steps keep the average rate short, like real generation does.
 	measureStep(t, "m1", 4, 50*time.Millisecond)
 	measureStep(t, "m2", 4, 50*time.Millisecond)
 
 	lines := MetricsStatusLines(13)
-	require.Len(t, lines, 2)
-	require.NotContains(t, lines[1], "avg ", "the average is dropped before a rate is cut in half")
+	require.Len(t, lines, 2, "the averages wrap instead of being dropped")
+	require.Contains(t, lines[0], "ttft ")
+	require.Contains(t, lines[1], "tps")
 	for _, line := range lines {
 		require.LessOrEqual(t, lipgloss.Width(line), 13)
 	}
 }
 
-func TestMetricsForWidthDropsTheLeastImportantMeasurements(t *testing.T) {
+func TestResetMetricsStartsTheAveragesOver(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	measureStep(t, "m1", 100, 2*time.Millisecond)
+	require.NotContains(t, sidebarStatus(t), "avg: ttft -")
+
+	ResetMetrics()
+
+	require.Equal(t, "avg: ttft - · - tps", sidebarStatus(t), "the averages are gone")
+	require.Empty(t, MetricsForWidth("m1", 0, 0, 200), "per-step timings are gone")
+	// The token counts live on the message, so a footer keeps showing them.
+	require.Equal(t, "↑12.3K · ↓456", MetricsForWidth("m1", 12_300, 456, 200))
+}
+
+func TestMetricsForWidthKeepsTheTokenCounts(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
 	StartTurn()
 	measureStep(t, "m1", 4, 50*time.Millisecond)
-	measureStep(t, "m2", 4, 50*time.Millisecond)
 
-	require.Contains(t, MetricsForWidth("m2", 200), "avg ", "everything fits when there is room")
-	require.NotContains(t, MetricsForWidth("m2", 22), "avg ", "the average goes first")
-	require.Contains(t, MetricsForWidth("m2", 22), "tok/s")
-	require.Equal(t, "ttft 0ms", MetricsForWidth("m2", 10))
-	require.Empty(t, MetricsForWidth("m2", 3), "nothing is shown rather than a cut-off number")
-	require.Empty(t, MetricsForWidth("other", 200), "untimed messages have no metrics")
+	require.Contains(t, MetricsForWidth("m1", 12_300, 456, 200), "tps", "everything fits when there is room")
+	require.Contains(t, MetricsForWidth("m1", 12_300, 456, 200), "↑12.3K")
+	require.Contains(t, MetricsForWidth("m1", 12_300, 456, 200), "↓456")
+
+	require.NotContains(t, MetricsForWidth("m1", 12_300, 456, 24), "tps", "the decode speed goes first")
+	require.Contains(t, MetricsForWidth("m1", 12_300, 456, 24), "ttft ")
+	require.Contains(t, MetricsForWidth("m1", 12_300, 456, 24), "↑12.3K")
+
+	require.NotContains(t, MetricsForWidth("m1", 12_300, 456, 17), "ttft ", "then the time to first token")
+	require.Equal(t, "↑12.3K · ↓456", MetricsForWidth("m1", 12_300, 456, 17))
+
+	require.Empty(t, MetricsForWidth("m1", 12_300, 456, 3), "nothing is shown rather than a cut-off number")
+	require.Empty(t, MetricsForWidth("m1", 12_300, 456, 0), "a zero width has no room")
+}
+
+func TestMetricsForWidthWithoutTimings(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	// A replayed message has no timings, but the counts stored on it survive.
+	require.Equal(t, "↑12.3K · ↓456", MetricsForWidth("replayed", 12_300, 456, 200))
+	require.Empty(t, MetricsForWidth("replayed", 0, 0, 200))
+}
+
+func TestLiveStatusEstimatesOutputWhileStreaming(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	MarkFirstToken()
+	time.Sleep(5 * time.Millisecond)
+	MarkStreamedOutput(400)
+
+	status := MetricsStatus()
+	require.Contains(t, status, "↓100", "400 streamed characters estimate 100 tokens")
+	require.Regexp(t, `[0-9.]+ tps`, status)
+	require.Contains(t, status, "↑-", "the prompt size is unknown until the request ends")
+}
+
+func TestLiveStatusPrefersTheReportedUsage(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	MarkFirstToken()
+	time.Sleep(5 * time.Millisecond)
+	MarkStreamedOutput(400)
+	MarkStepFinished()
+	FinishStep(12_300, 456)
+
+	status := MetricsStatus()
+	require.Contains(t, status, "↑12.3K")
+	require.Contains(t, status, "↓456")
+	require.NotContains(t, status, "↓100", "the estimate gives way to the reported count")
+}
+
+func TestLiveStatusCarriesTheLastStepIntoTheNextOne(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	measureStep(t, "m1", 100, 2*time.Millisecond)
+	FinishStep(12_300, 456)
+
+	// The next step has produced nothing yet, so the indicator keeps showing
+	// the numbers of the step before it rather than a row of dashes.
+	StartStep("m2")
+	status := MetricsStatus()
+	require.Contains(t, status, "↑12.3K")
+	require.Contains(t, status, "↓456")
+	require.Regexp(t, `ttft [0-9]+ms`, status)
 }

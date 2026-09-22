@@ -17,57 +17,84 @@ const statusSeparator = " · "
 // metrics in memory so a long session cannot grow the tracker without limit.
 const maxTrackedSteps = 128
 
+// minThroughputWindow is the shortest generation window a throughput reading is
+// derived from. A response that arrives in one piece (a cache hit or an
+// instant local reply) streams first token and finish within microseconds,
+// which would report an absurd rate instead of none at all.
+const minThroughputWindow = time.Millisecond
+
+// estimatedTokenChars is how many streamed characters the live estimate counts
+// as one token, matching the fallback the agent uses when a provider reports no
+// usage (internal/agent/usage_fallback.go). It only feeds the working indicator
+// while a response is still streaming, and the reported counts replace it as
+// soon as the request ends.
+const estimatedTokenChars = 4
+
 // stepMetrics holds the generation timings of a single assistant message.
 type stepMetrics struct {
 	// ttft is the time from the start of the step to its first token.
 	ttft time.Duration
-	// tokens is the step's output token count, and window the generation time
-	// it was measured over. Together they feed the running average.
-	tokens int64
-	window time.Duration
-	// tps is the step's throughput in output tokens per second.
+	// promptTokens and tokens are the input and output token counts the
+	// provider reported for the step.
+	promptTokens int64
+	tokens       int64
+	// tps is the step's decode speed in output tokens per second.
 	tps float64
-	// hasTPS reports whether a throughput measurement is available.
+	// hasTPS reports whether a decode speed measurement is available.
 	hasTPS bool
-	// avgTPS is the running average throughput of the session as of this step.
-	avgTPS float64
-	// hasAvg reports whether an average throughput is available.
-	hasAvg bool
 }
 
-// turnTimer tracks the elapsed time and the generation timings for the current
-// agent turn: the time to the first streamed token and the output tokens per
-// second of every step. Each model response is a separate step and gets its own
-// assistant message, so metrics are kept per message ID. Every step also feeds
-// the session's running average throughput.
-var turnTimer struct {
+// metricsTracker tracks the elapsed time of the current agent turn, the
+// generation timings of the step being streamed, and the session's running
+// averages. Each model response is a separate step and gets its own assistant
+// message, so per-step metrics are kept by message ID.
+type metricsTracker struct {
 	mu        sync.Mutex
 	startTime time.Time
 	active    bool
 
-	// stepMessageID is the assistant message being timed right now.
-	stepMessageID string
-	// stepStartTime is when the current step began.
-	stepStartTime time.Time
-	// firstTokenTime is when the first token of the current step arrived.
-	firstTokenTime time.Time
-	// stepFinishedAt is when the current step stopped streaming. It freezes the
-	// throughput window so a later, more accurate token count does not stretch
-	// the measured duration.
-	stepFinishedAt time.Time
+	// sessionID is the session the accumulated metrics belong to, which is
+	// what tells a session switch apart from a reload of the same session.
+	sessionID string
 
-	// totalTokens and totalWindow accumulate the measured output tokens and
-	// generation time of every step of the session, which give the running
-	// average throughput. totalSteps counts the steps that contributed.
-	totalTokens int64
-	totalWindow time.Duration
-	totalSteps  int
+	// stepMessageID is the assistant message being timed right now, and
+	// stepStartTime when it began.
+	stepMessageID  string
+	stepStartTime  time.Time
+	firstTokenTime time.Time
+	// stepFinishedAt is when the current step stopped streaming. It freezes
+	// the throughput window so a later, more accurate token count does not
+	// stretch the measured duration.
+	stepFinishedAt time.Time
+	// streamedChars is how much model output the current step has produced
+	// so far, which feeds the live estimate.
+	streamedChars int
+
+	// last* remember the most recent completed step so every part of the
+	// live status stays populated between steps. They describe the session
+	// and are cleared when it changes.
+	lastTTFT         time.Duration
+	lastTPS          float64
+	lastPromptTokens int64
+	lastOutputTokens int64
+
+	// rateSum and rateSteps hold the session's average decode speed, as the
+	// mean of every measured step's rate. ttftSum and ttftSteps hold its
+	// average time to first token the same way.
+	rateSum   float64
+	rateSteps int
+	ttftSum   time.Duration
+	ttftSteps int
 
 	// steps keeps the timings of recent steps by assistant message ID so the
 	// footer of a finished turn can keep showing them.
 	steps map[string]stepMetrics
 	order []string
 }
+
+// turnTimer is the process-wide tracker. Generation metrics describe the
+// session on screen, so switching sessions or models resets them.
+var turnTimer metricsTracker
 
 // StartTurn begins tracking elapsed time for a new turn.
 func StartTurn() {
@@ -79,6 +106,7 @@ func StartTurn() {
 	turnTimer.stepStartTime = turnTimer.startTime
 	turnTimer.firstTokenTime = time.Time{}
 	turnTimer.stepFinishedAt = time.Time{}
+	turnTimer.streamedChars = 0
 }
 
 // StopTurn stops tracking the current turn. Generation metrics stay readable so
@@ -89,15 +117,43 @@ func StopTurn() {
 	turnTimer.active = false
 }
 
-// Elapsed returns the formatted elapsed time for the current turn.
-// Returns empty string if no turn is active.
-func Elapsed() string {
+// SessionChanged tells the tracker which session is on screen. When it differs
+// from the session the accumulated metrics belong to, they are dropped: the
+// averages describe the session they were measured in. A turn that is already
+// running keeps its elapsed time, so loading a session mid-turn does not
+// restart its clock.
+func SessionChanged(sessionID string) {
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
-	if !turnTimer.active {
-		return ""
+	if turnTimer.sessionID == sessionID {
+		return
 	}
-	return formatElapsed(time.Since(turnTimer.startTime))
+	turnTimer.sessionID = sessionID
+	turnTimer.resetLocked()
+}
+
+// ResetMetrics drops the session's accumulated averages and per-step timings,
+// which is what callers do when the model changes. A turn that is already
+// running keeps its elapsed time: the reset must not restart it.
+func ResetMetrics() {
+	turnTimer.mu.Lock()
+	defer turnTimer.mu.Unlock()
+	turnTimer.resetLocked()
+}
+
+// resetLocked clears everything that describes the session's generation
+// history. Callers must hold turnTimer.mu.
+func (t *metricsTracker) resetLocked() {
+	t.rateSum = 0
+	t.rateSteps = 0
+	t.ttftSum = 0
+	t.ttftSteps = 0
+	t.lastTTFT = 0
+	t.lastTPS = 0
+	t.lastPromptTokens = 0
+	t.lastOutputTokens = 0
+	t.steps = nil
+	t.order = nil
 }
 
 // StartStep begins timing a new generation step for the assistant message with
@@ -110,6 +166,7 @@ func StartStep(messageID string) {
 	turnTimer.stepStartTime = time.Now()
 	turnTimer.firstTokenTime = time.Time{}
 	turnTimer.stepFinishedAt = time.Time{}
+	turnTimer.streamedChars = 0
 }
 
 // StepMessageID returns the assistant message currently being timed, or an
@@ -142,9 +199,23 @@ func MarkFirstToken() {
 	if _, ok := turnTimer.steps[turnTimer.stepMessageID]; ok {
 		return
 	}
-	setStepLocked(turnTimer.stepMessageID, stepMetrics{
-		ttft: turnTimer.firstTokenTime.Sub(turnTimer.stepStartTime),
-	})
+	ttft := turnTimer.firstTokenTime.Sub(turnTimer.stepStartTime)
+	turnTimer.ttftSum += ttft
+	turnTimer.ttftSteps++
+	turnTimer.lastTTFT = ttft
+	setStepLocked(turnTimer.stepMessageID, stepMetrics{ttft: ttft})
+}
+
+// MarkStreamedOutput records how much model output the step currently being
+// timed has produced, in characters. The working indicator turns it into a live
+// token estimate, since providers report real usage only when a request ends.
+func MarkStreamedOutput(chars int) {
+	turnTimer.mu.Lock()
+	defer turnTimer.mu.Unlock()
+	if !turnTimer.active || turnTimer.stepMessageID == "" {
+		return
+	}
+	turnTimer.streamedChars = chars
 }
 
 // MarkStepFinished freezes the current step's generation window. Repeating the
@@ -157,156 +228,211 @@ func MarkStepFinished() {
 	}
 }
 
-// minThroughputWindow is the shortest generation window a throughput reading is
-// derived from. A response that arrives in one piece (a cache hit or an
-// instant local reply) streams first token and finish within microseconds,
-// which would report an absurd rate instead of none at all.
-const minThroughputWindow = time.Millisecond
-
-// FinishStep records the output tokens generated by the current step, derives
-// its throughput, and folds it into the session's running average. Repeating
-// the call is safe: the window was frozen when the step finished, so a more
-// accurate token count only refines the rate and replaces the step's earlier
-// contribution.
-func FinishStep(tokens int64) {
+// FinishStep records the token usage the provider reported for the current
+// step, derives its decode speed, and folds both into the session's running
+// averages. Repeating the call is safe: the window was frozen when the step
+// finished, so a more accurate count only refines the rate and replaces the
+// step's earlier contribution.
+func FinishStep(promptTokens, completionTokens int64) {
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
 	id := turnTimer.stepMessageID
-	if id == "" || tokens <= 0 || turnTimer.firstTokenTime.IsZero() || turnTimer.stepFinishedAt.IsZero() {
-		return
-	}
-	elapsed := turnTimer.stepFinishedAt.Sub(turnTimer.firstTokenTime)
-	if elapsed < minThroughputWindow {
+	if id == "" {
 		return
 	}
 
 	metrics := turnTimer.steps[id]
-	if metrics.window > 0 {
-		turnTimer.totalTokens += tokens - metrics.tokens
-		turnTimer.totalWindow += elapsed - metrics.window
-	} else {
-		turnTimer.totalTokens += tokens
-		turnTimer.totalWindow += elapsed
-		turnTimer.totalSteps++
+	if promptTokens > 0 {
+		metrics.promptTokens = promptTokens
+		turnTimer.lastPromptTokens = promptTokens
+	}
+	if completionTokens > 0 {
+		metrics.tokens = completionTokens
+		turnTimer.lastOutputTokens = completionTokens
 	}
 
-	metrics.tokens = tokens
-	metrics.window = elapsed
-	metrics.tps = float64(tokens) / elapsed.Seconds()
-	metrics.hasTPS = true
-	if turnTimer.totalWindow > 0 {
-		metrics.avgTPS = float64(turnTimer.totalTokens) / turnTimer.totalWindow.Seconds()
-		metrics.hasAvg = true
+	if completionTokens > 0 && !turnTimer.firstTokenTime.IsZero() && !turnTimer.stepFinishedAt.IsZero() {
+		elapsed := turnTimer.stepFinishedAt.Sub(turnTimer.firstTokenTime)
+		if elapsed >= minThroughputWindow {
+			rate := float64(completionTokens) / elapsed.Seconds()
+			if metrics.hasTPS {
+				// A refined count for a step that already contributed
+				// must replace its rate, not add a second one.
+				turnTimer.rateSum += rate - metrics.tps
+			} else {
+				turnTimer.rateSum += rate
+				turnTimer.rateSteps++
+			}
+			metrics.tps = rate
+			metrics.hasTPS = true
+			turnTimer.lastTPS = rate
+		}
 	}
+
 	setStepLocked(id, metrics)
 }
 
-// MetricsFor returns the generation metrics of the assistant message with the
-// given ID, formatted for display. It returns an empty string when the message
-// was never timed, so replayed history never shows another turn's numbers.
-func MetricsFor(messageID string) string {
-	turnTimer.mu.Lock()
-	defer turnTimer.mu.Unlock()
-	metrics, ok := turnTimer.steps[messageID]
-	if messageID == "" || !ok {
-		return ""
-	}
-	return formatMetrics(metrics)
-}
-
-// MetricsForWidth returns the metrics of the assistant message with the given
-// ID trimmed to a column of the given width, dropping the least important
-// measurements first (the turn average, then the throughput). It returns an
-// empty string when nothing fits, so callers never have to cut a rate in half.
-func MetricsForWidth(messageID string, width int) string {
-	turnTimer.mu.Lock()
-	defer turnTimer.mu.Unlock()
-	metrics, ok := turnTimer.steps[messageID]
-	if messageID == "" || !ok || width <= 0 {
-		return ""
-	}
-	parts := metricsParts(metrics)
-	for len(parts) > 0 && width > 0 && visibleWidth(parts) > width {
-		parts = parts[:len(parts)-1]
-	}
-	if width > 0 && visibleWidth(parts) > width {
-		return ""
-	}
-	return strings.Join(parts, statusSeparator)
-}
-
-// MetricsStatus returns the live generation suffix for the working indicator:
-// the elapsed turn time plus the time to first token and throughput of the
-// current step once they are known.
+// MetricsStatus returns the live generation status of the working indicator:
+// the elapsed turn time and, for the response being generated, its time to
+// first token, decode speed, and input and output token counts.
 func MetricsStatus() string {
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
-	status := statusLocked()
-	return strings.Join(append(status.timing, status.throughput...), statusSeparator)
+	return strings.Join(turnTimer.livePartsLocked(), statusSeparator)
 }
 
-// MetricsStatusLines lays the live generation status out for a column of the
-// given width: one line when everything fits, otherwise the turn timing and the
-// throughput split over two lines so no measurement is dropped. A non-positive
-// width means no limit.
+// MetricsStatusLines returns the session's average generation status laid out
+// for a column of the given width. Both averages are always reported, as "-"
+// until the session has measured something, and the line wraps rather than
+// dropping a measurement when it does not fit.
 func MetricsStatusLines(width int) []string {
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
-	status := statusLocked()
-	if len(status.timing) == 0 && len(status.throughput) == 0 {
-		return nil
+	timing := "avg: ttft " + turnTimer.averageTTFTLocked()
+	throughput := formatTPS(turnTimer.averageTPSLocked())
+	joined := timing + statusSeparator + throughput
+	if width <= 0 || lipgloss.Width(joined) <= width {
+		return []string{joined}
 	}
-	joined := append(append([]string{}, status.timing...), status.throughput...)
-	if width <= 0 || visibleWidth(joined) <= width {
-		return []string{strings.Join(joined, statusSeparator)}
-	}
-
-	// The turn timing needs its own line before any measurement is dropped,
-	// and the throughput line only sheds its tail (starting with the average)
-	// when even that does not fit.
-	timing := status.timing
-	throughput := status.throughput
-	for len(throughput) > 0 && visibleWidth(throughput) > width {
-		throughput = throughput[:len(throughput)-1]
-	}
-
-	var lines []string
-	if len(timing) > 0 {
-		lines = append(lines, truncateLine(strings.Join(timing, statusSeparator), width))
-	}
-	if len(throughput) > 0 {
-		lines = append(lines, strings.Join(throughput, statusSeparator))
-	}
-	return lines
+	return []string{truncateLine(timing, width), truncateLine(throughput, width)}
 }
 
-// statusParts splits a generation status into the parts that read as the turn
-// timing (elapsed time, time to first token) and those that read as throughput
-// (step rate, turn average).
-type statusParts struct {
-	timing     []string
-	throughput []string
+// MetricsForWidth returns the generation metrics of the assistant message with
+// the given ID, trimmed to a column of the given width. The token counts are
+// read from the message rather than the tracker, so they stay available after a
+// reload, when the process-local timings are gone. The decode speed is dropped
+// before the time to first token, so a rate is never cut in half, and an empty
+// string means nothing fits.
+func MetricsForWidth(messageID string, messagePromptTokens, messageCompletionTokens int64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	turnTimer.mu.Lock()
+	defer turnTimer.mu.Unlock()
+
+	var timings []string
+	if metrics, ok := turnTimer.steps[messageID]; ok {
+		timings = append(timings, "ttft "+formatTTFTValue(metrics.ttft))
+		if metrics.hasTPS {
+			timings = append(timings, formatTPS(metrics.tps, true))
+		}
+	}
+	tokens := tokenCountParts(messagePromptTokens, messageCompletionTokens)
+
+	// Walk the measurements from the most complete to the least, so a narrow
+	// footer loses the decode speed, then the time to first token, and keeps
+	// the token counts for as long as they fit.
+	candidates := make([][]string, 0, 3)
+	candidates = append(candidates, append(append([]string{}, timings...), tokens...))
+	if len(timings) == 2 {
+		candidates = append(candidates, append([]string{timings[0]}, tokens...))
+	}
+	candidates = append(candidates, tokens)
+	for _, parts := range candidates {
+		if len(parts) > 0 && visibleWidth(parts) <= width {
+			return strings.Join(parts, statusSeparator)
+		}
+	}
+	return ""
 }
 
-// statusLocked returns the parts of the live generation status of the tracked
-// step. Callers must hold turnTimer.mu.
-func statusLocked() statusParts {
-	var status statusParts
-	if turnTimer.active {
-		status.timing = append(status.timing, formatElapsed(time.Since(turnTimer.startTime)))
+// tokenCountParts renders the input and output token counts of a response,
+// leaving out either one when the message carries no count for it.
+func tokenCountParts(promptTokens, completionTokens int64) []string {
+	var parts []string
+	if promptTokens > 0 {
+		parts = append(parts, "↑"+formatCompactCount(promptTokens))
 	}
-	metrics, ok := turnTimer.steps[turnTimer.stepMessageID]
-	if !ok {
-		return status
+	if completionTokens > 0 {
+		parts = append(parts, "↓"+formatCompactCount(completionTokens))
 	}
-	status.timing = append(status.timing, "ttft "+formatTTFT(metrics.ttft))
-	if metrics.hasTPS {
-		status.throughput = append(status.throughput, formatTPS(metrics.tps))
+	return parts
+}
+
+// livePartsLocked returns the parts of the live generation status of the
+// tracked step. Every measurement falls back to the most recent completed step
+// and then to "-", so the indicator never loses a segment between steps.
+// Callers must hold turnTimer.mu.
+func (t *metricsTracker) livePartsLocked() []string {
+	var parts []string
+	if t.active {
+		parts = append(parts, formatElapsed(time.Since(t.startTime)))
 	}
-	if metrics.hasAvg {
-		status.throughput = append(status.throughput, "avg "+formatTPS(metrics.avgTPS))
+
+	metrics, tracked := t.steps[t.stepMessageID]
+	estimatedTokens, estimatedTPS, hasEstimate := t.liveEstimateLocked()
+
+	ttft := t.lastTTFT
+	if tracked && metrics.ttft > 0 {
+		ttft = metrics.ttft
 	}
-	return status
+
+	tps, hasTPS := t.lastTPS, t.lastTPS > 0
+	switch {
+	case tracked && metrics.hasTPS:
+		tps, hasTPS = metrics.tps, true
+	case hasEstimate:
+		tps, hasTPS = estimatedTPS, true
+	}
+
+	promptTokens := t.lastPromptTokens
+	if tracked && metrics.promptTokens > 0 {
+		promptTokens = metrics.promptTokens
+	}
+
+	outputTokens := t.lastOutputTokens
+	switch {
+	case tracked && metrics.tokens > 0:
+		outputTokens = metrics.tokens
+	case hasEstimate:
+		outputTokens = estimatedTokens
+	}
+
+	parts = append(parts, "ttft "+formatTTFTValue(ttft), formatTPS(tps, hasTPS))
+	if promptTokens > 0 {
+		parts = append(parts, "↑"+formatCompactCount(promptTokens))
+	} else {
+		parts = append(parts, "↑-")
+	}
+	if outputTokens > 0 {
+		parts = append(parts, "↓"+formatCompactCount(outputTokens))
+	} else {
+		parts = append(parts, "↓-")
+	}
+	return parts
+}
+
+// liveEstimateLocked estimates the output tokens and decode speed of the step
+// currently streaming from the number of characters it has produced. Callers
+// must hold turnTimer.mu.
+func (t *metricsTracker) liveEstimateLocked() (tokens int64, tps float64, ok bool) {
+	if t.firstTokenTime.IsZero() || t.streamedChars <= 0 {
+		return 0, 0, false
+	}
+	elapsed := time.Since(t.firstTokenTime)
+	if elapsed < minThroughputWindow {
+		return 0, 0, false
+	}
+	tokens = int64((t.streamedChars + estimatedTokenChars - 1) / estimatedTokenChars)
+	return tokens, float64(tokens) / elapsed.Seconds(), true
+}
+
+// averageTTFTLocked returns the session's average time to first token, or "-"
+// when no step has been measured yet. Callers must hold turnTimer.mu.
+func (t *metricsTracker) averageTTFTLocked() string {
+	if t.ttftSteps == 0 {
+		return "-"
+	}
+	return formatTTFT(t.ttftSum / time.Duration(t.ttftSteps))
+}
+
+// averageTPSLocked returns the session's average decode speed, which is the
+// mean of every measured step's rate. Callers must hold turnTimer.mu.
+func (t *metricsTracker) averageTPSLocked() (float64, bool) {
+	if t.rateSteps == 0 {
+		return 0, false
+	}
+	return t.rateSum / float64(t.rateSteps), true
 }
 
 // visibleWidth returns the printed width of a status line's parts, including
@@ -316,7 +442,7 @@ func visibleWidth(parts []string) int {
 }
 
 // truncateLine shortens an unprintably long status line, which only happens
-// when an unusually slow time to first token leaves no room at all.
+// when the column is narrower than a single measurement.
 func truncateLine(line string, width int) string {
 	if width <= 0 || lipgloss.Width(line) <= width {
 		return line
@@ -341,25 +467,13 @@ func setStepLocked(messageID string, metrics stepMetrics) {
 	turnTimer.steps[messageID] = metrics
 }
 
-// formatMetrics renders a step's timings as
-// "ttft 0.42s · 58.3 tok/s · avg 54.2 tok/s", omitting the throughput until it
-// is known and the turn average until more than one step was measured.
-func formatMetrics(metrics stepMetrics) string {
-	return strings.Join(metricsParts(metrics), statusSeparator)
-}
-
-// metricsParts returns the display parts of a step's timings: the time to first
-// token, its throughput once measured, and the turn's average once a second
-// step has been measured.
-func metricsParts(metrics stepMetrics) []string {
-	parts := []string{"ttft " + formatTTFT(metrics.ttft)}
-	if metrics.hasTPS {
-		parts = append(parts, formatTPS(metrics.tps))
+// formatTTFTValue renders a time to first token, or "-" when it was never
+// measured.
+func formatTTFTValue(ttft time.Duration) string {
+	if ttft <= 0 {
+		return "-"
 	}
-	if metrics.hasAvg {
-		parts = append(parts, "avg "+formatTPS(metrics.avgTPS))
-	}
-	return parts
+	return formatTTFT(ttft)
 }
 
 // formatTTFT renders a time to first token with millisecond precision for fast
@@ -375,12 +489,16 @@ func formatTTFT(ttft time.Duration) string {
 	}
 }
 
-// formatTPS renders a throughput in output tokens per second.
-func formatTPS(tps float64) string {
-	if tps >= 100 {
-		return fmt.Sprintf("%.0f tok/s", tps)
+// formatTPS renders a decode speed in output tokens per second, or "-" when no
+// measurement is available.
+func formatTPS(tps float64, ok bool) string {
+	if !ok {
+		return "- tps"
 	}
-	return fmt.Sprintf("%.1f tok/s", tps)
+	if tps >= 100 {
+		return fmt.Sprintf("%.0f tps", tps)
+	}
+	return fmt.Sprintf("%.1f tps", tps)
 }
 
 // formatElapsed renders a duration the way the working indicator shows it:

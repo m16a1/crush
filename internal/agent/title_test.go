@@ -136,7 +136,10 @@ func TestTitleRequestWaitsForTheTurnToEnd(t *testing.T) {
 	require.Equal(t, []string{"turn-start", "turn-end", "title-start", "title-end"}, events)
 	require.Equal(t, 1, maxInFlight, "the title request must not overlap the turn's request")
 
-	updated, err := env.sessions.Get(t.Context(), session.ID)
-	require.NoError(t, err)
-	require.Equal(t, "Named the turn", updated.Title)
+	// The generated title is saved after the title stream ends, so wait for
+	// the stored value rather than for the stream.
+	require.Eventually(t, func() bool {
+		updated, err := env.sessions.Get(t.Context(), session.ID)
+		return err == nil && updated.Title == "Named the turn"
+	}, 5*time.Second, 10*time.Millisecond, "the generated title is stored on the session")
 }

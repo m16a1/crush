@@ -393,12 +393,13 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 	provider := a.sty.Messages.AssistantInfoProvider.Render(fmt.Sprintf("via %s", providerName))
 	duration := time.Unix(finishData.Time, 0).Sub(a.lastUserMessageTime)
 	timing := fmt.Sprintf("in %s", duration)
-	// Generation metrics are only available for turns this process timed, so
-	// replayed history shows the duration alone. They are trimmed to whatever
-	// room the model and provider names leave, dropping the turn average before
-	// the throughput instead of cutting a number in half.
+	// Generation timings are only available for steps this process timed, so
+	// replayed history shows the token counts alone. They are trimmed to
+	// whatever room the model and provider names leave, dropping the decode
+	// speed before the time to first token and never cutting a number in half.
 	budget := width - lipgloss.Width(assistantPrefix(icon, modelFormatted, provider)) - lipgloss.Width(timing)
-	if metrics := common.MetricsForWidth(a.message.ID, budget); metrics != "" {
+	metrics := common.MetricsForWidth(a.message.ID, finishData.PromptTokens, finishData.CompletionTokens, budget)
+	if metrics != "" {
 		timing += " · " + metrics
 	}
 	infoMsg := a.sty.Messages.AssistantInfoDuration.Render(timing)

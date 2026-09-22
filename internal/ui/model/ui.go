@@ -862,6 +862,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		// Generation averages describe the session they were measured in,
+		// so loading a different one starts them over. A reload of the
+		// session already on screen leaves them alone.
+		common.SessionChanged(msg.session.ID)
 		m.setState(uiChat, m.focus)
 		m.session = msg.session
 		m.sidebarOffset = 0
@@ -1011,7 +1015,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.autoExpandPillsIfReasonable()
 			// A step's usage lands just after the step finished streaming on
 			// the agent side; use it to close out the throughput measurement.
-			m.finalizeStepMetrics(msg.Payload.CompletionTokens)
+			m.finalizeStepMetrics(msg.Payload.PromptTokens, msg.Payload.CompletionTokens)
 		}
 	case pubsub.Event[message.Message]:
 		// Check if this is a child session message for an agent tool.
@@ -1784,24 +1788,25 @@ func (m *UI) trackStreamStep(msg *message.Message) {
 		}
 		common.StartStep(msg.ID)
 	}
-	if messageHasModelOutput(msg) {
+	if outputChars := modelOutputLength(msg); outputChars > 0 {
 		common.MarkFirstToken()
+		common.MarkStreamedOutput(outputChars)
 	}
 	if msg.FinishPart() != nil {
 		common.MarkStepFinished()
 		if m.session != nil {
-			m.finalizeStepMetrics(m.session.CompletionTokens)
+			m.finalizeStepMetrics(m.session.PromptTokens, m.session.CompletionTokens)
 		}
 	}
 }
 
-// finalizeStepMetrics derives the current step's throughput from its output
-// token count and refreshes the assistant footer so the new numbers appear.
-func (m *UI) finalizeStepMetrics(tokens int64) {
-	if tokens <= 0 {
+// finalizeStepMetrics records the token usage the provider reported for the
+// current step and refreshes the assistant footer so the new numbers appear.
+func (m *UI) finalizeStepMetrics(promptTokens, completionTokens int64) {
+	if promptTokens <= 0 && completionTokens <= 0 {
 		return
 	}
-	common.FinishStep(tokens)
+	common.FinishStep(promptTokens, completionTokens)
 	m.invalidateAssistantInfo(common.StepMessageID())
 }
 
@@ -1818,26 +1823,22 @@ func (m *UI) invalidateAssistantInfo(messageID string) {
 	item.InvalidateMetrics()
 }
 
-// messageHasModelOutput reports whether an assistant message has streamed any
-// model output yet, which is what marks the first token of a step.
-func messageHasModelOutput(msg *message.Message) bool {
+// modelOutputLength returns how much model output an assistant message has
+// streamed so far, in characters. The working indicator turns it into a live
+// token estimate, since providers only report real usage when a step ends.
+func modelOutputLength(msg *message.Message) int {
+	var length int
 	for _, part := range msg.Parts {
 		switch p := part.(type) {
 		case message.TextContent:
-			if strings.TrimSpace(p.Text) != "" {
-				return true
-			}
+			length += len(p.Text)
 		case message.ReasoningContent:
-			if strings.TrimSpace(p.Thinking) != "" {
-				return true
-			}
+			length += len(p.Thinking)
 		case message.ToolCall:
-			if p.Finished || p.Input != "" {
-				return true
-			}
+			length += len(p.Input)
 		}
 	}
-	return false
+	return length
 }
 
 // appendSessionMessage appends a new message to the current session in the chat
@@ -2780,6 +2781,10 @@ func (m *UI) restoreModelFromSession(msgs []message.Message) tea.Cmd {
 
 	m.applyThemeForProvider(lastAssistant.Provider)
 
+	// The session's model is about to replace the current one, so the
+	// generation averages no longer describe what is being generated.
+	common.ResetMetrics()
+
 	if _, ok := cfg.Models[config.SelectedModelTypeSmall]; !ok {
 		smallModel := m.com.Workspace.GetDefaultSmallModel(lastAssistant.Provider)
 		if err := m.com.Workspace.UpdatePreferredModel(config.ScopeGlobal, config.SelectedModelTypeSmall, smallModel); err != nil {
@@ -2818,6 +2823,10 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 		isCopilot    = providerID == string(catwalk.InferenceProviderCopilot)
 		isConfigured = func() bool { _, ok := cfg.Providers.Get(providerID); return ok }
 		isOnboarding = m.state == uiOnboarding
+		// previousLarge is captured before the update below, which
+		// mutates cfg in place, so the model actually changing can be
+		// told apart from the same model being selected again.
+		previousLarge = cfg.Models[config.SelectedModelTypeLarge]
 	)
 
 	// For Hyper, if the stored OAuth token is expired, try a silent
@@ -2878,6 +2887,12 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 			// the already-active theme, which avoids a full markdown
 			// re-render of the transcript on every selection.
 			m.applyThemeForProvider(providerID)
+			// A different model means different generation timings, so
+			// the averages start over. Re-picking the same model leaves
+			// them alone.
+			if previousLarge.Provider != msg.Model.Provider || previousLarge.Model != msg.Model.Model {
+				common.ResetMetrics()
+			}
 		}
 		if _, ok := cfg.Models[config.SelectedModelTypeSmall]; !ok {
 			// Ensure small model is set is unset.

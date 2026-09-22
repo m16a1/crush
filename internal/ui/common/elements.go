@@ -94,22 +94,7 @@ func ModelInfo(t *styles.Styles, modelName, providerName, reasoningInfo string, 
 // formatTokensAndCost formats token usage and cost with appropriate units
 // (K/M) and percentage of context window.
 func formatTokensAndCost(t *styles.Styles, tokens, contextWindow int64, cost float64, estimated bool) string {
-	var formattedTokens string
-	switch {
-	case tokens >= 1_000_000:
-		formattedTokens = fmt.Sprintf("%.1fM", float64(tokens)/1_000_000)
-	case tokens >= 1_000:
-		formattedTokens = fmt.Sprintf("%.1fK", float64(tokens)/1_000)
-	default:
-		formattedTokens = fmt.Sprintf("%d", tokens)
-	}
-
-	if strings.HasSuffix(formattedTokens, ".0K") {
-		formattedTokens = strings.Replace(formattedTokens, ".0K", "K", 1)
-	}
-	if strings.HasSuffix(formattedTokens, ".0M") {
-		formattedTokens = strings.Replace(formattedTokens, ".0M", "M", 1)
-	}
+	formattedTokens := formatCompactCount(tokens)
 
 	var percentage float64
 	if contextWindow > 0 {
@@ -130,6 +115,24 @@ func formatTokensAndCost(t *styles.Styles, tokens, contextWindow int64, cost flo
 	}
 
 	return fmt.Sprintf("%s %s", formattedTokens, formattedCost)
+}
+
+// formatCompactCount renders a token count with K/M units, dropping a trailing
+// ".0" so round values stay short.
+func formatCompactCount(count int64) string {
+	switch {
+	case count >= 1_000_000:
+		return compactUnit(float64(count)/1_000_000, "M")
+	case count >= 1_000:
+		return compactUnit(float64(count)/1_000, "K")
+	default:
+		return fmt.Sprintf("%d", count)
+	}
+}
+
+// compactUnit renders a scaled count with its unit, without a trailing zero.
+func compactUnit(value float64, unit string) string {
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", value), ".0") + unit
 }
 
 // FormatCredits formats an integer with comma separators for thousands.

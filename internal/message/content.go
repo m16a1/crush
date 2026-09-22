@@ -133,6 +133,12 @@ type Finish struct {
 	Time    int64        `json:"time"`
 	Message string       `json:"message,omitempty"`
 	Details string       `json:"details,omitempty"`
+	// PromptTokens and CompletionTokens are the provider's token usage
+	// for the step this message belongs to. Both are zero when the
+	// provider reported no usage, and messages written before these
+	// fields existed simply have none.
+	PromptTokens     int64 `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64 `json:"completion_tokens,omitempty"`
 }
 
 func (Finish) isPart() {}
@@ -508,6 +514,22 @@ func (m *Message) AddFinish(reason FinishReason, message, details string) {
 		}
 	}
 	m.Parts = append(m.Parts, Finish{Reason: reason, Time: time.Now().Unix(), Message: message, Details: details})
+}
+
+// SetFinishUsage records the provider's token usage on the message's finish
+// part, so the per-message footer can show the counts after the response has
+// ended. It does nothing when the message has no finish part.
+func (m *Message) SetFinishUsage(promptTokens, completionTokens int64) {
+	for i, part := range m.Parts {
+		finish, ok := part.(Finish)
+		if !ok {
+			continue
+		}
+		finish.PromptTokens = promptTokens
+		finish.CompletionTokens = completionTokens
+		m.Parts[i] = finish
+		return
+	}
 }
 
 func (m *Message) AddImageURL(url, detail string) {

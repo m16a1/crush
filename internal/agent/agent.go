@@ -1034,6 +1034,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				return getSessionErr
 			}
 			usage, estimated := fallbackStepUsage(stepMessages, stepResult)
+			// Keep the step's token usage on the message itself so the
+			// per-message footer can show it after a reload, when the
+			// process-local generation metrics are gone.
+			currentAssistant.SetFinishUsage(usage.InputTokens+usage.CacheReadTokens, usage.OutputTokens)
 			a.updateSessionUsage(largeModel, &updatedSession, usage, a.openrouterCost(stepResult.ProviderMetadata), estimated)
 			_, sessionErr := a.sessions.Save(ctx, updatedSession)
 			if sessionErr != nil {
