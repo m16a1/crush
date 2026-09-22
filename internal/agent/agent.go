@@ -148,6 +148,7 @@ type SessionAgent interface {
 	Summarize(context.Context, string, fantasy.ProviderOptions, func(context.Context, *fantasy.ProviderError) error) error
 	Model() Model
 	GenerateTitle(ctx context.Context, sessionID, userPrompt string)
+	RegenerateTitle(ctx context.Context, sessionID string) error
 }
 
 type Model struct {
@@ -1734,22 +1735,86 @@ func hasUserTextMessage(msgs []message.Message) bool {
 	return false
 }
 
-// GenerateTitle generates a session title based on the initial prompt.
+// GenerateTitle generates a session title based on the initial prompt. A
+// session that cannot be titled keeps the default name, which is what a
+// brand-new session is already called.
 func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, userPrompt string) {
 	if userPrompt == "" {
 		return
+	}
+	if err := a.generateTitle(ctx, sessionID, userPrompt, false); err != nil {
+		slog.Error("Failed to generate session title", "error", err)
+	}
+}
+
+// RegenerateTitle replaces the session's title with one generated from the
+// prompt that started it. Unlike GenerateTitle it reports why it failed and
+// leaves the current title in place, because the session already has a usable
+// name to lose.
+func (a *sessionAgent) RegenerateTitle(ctx context.Context, sessionID string) error {
+	if a.IsSessionBusy(sessionID) {
+		return ErrSessionBusy
+	}
+
+	sess, err := a.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+	msgs, err := a.getSessionMessages(ctx, sess)
+	if err != nil {
+		return err
+	}
+
+	for _, msg := range msgs {
+		if msg.Role != message.User {
+			continue
+		}
+		if prompt := titlePromptFromMessage(msg); prompt != "" {
+			return a.generateTitle(ctx, sessionID, prompt, true)
+		}
+	}
+	return errors.New("session has no prompt to base a title on")
+}
+
+// titlePromptFromMessage returns the text a title can be generated from: the
+// message's text parts, or the shell command it ran, matching the prompt the
+// automatic title uses for a session that starts with a bang command.
+func titlePromptFromMessage(msg message.Message) string {
+	var parts []string
+	for _, part := range msg.Parts {
+		switch p := part.(type) {
+		case message.TextContent:
+			if p.Text != "" {
+				parts = append(parts, p.Text)
+			}
+		case message.ShellCommand:
+			if p.Command != "" {
+				parts = append(parts, "$ "+p.Command)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+// generateTitle builds a title from userPrompt and stores it. When
+// keepExisting is set the session keeps the title it has if generation fails;
+// otherwise the default name is saved so the session is never left nameless.
+func (a *sessionAgent) generateTitle(ctx context.Context, sessionID, userPrompt string, keepExisting bool) error {
+	if userPrompt == "" {
+		return errors.New("no prompt to generate a title from")
 	}
 
 	// Ensure the session always gets a title even if every path below
 	// fails or the context is cancelled before we finish.
 	var titleSaved bool
 	defer func() {
-		if !titleSaved {
-			fallbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			if err := a.sessions.Rename(fallbackCtx, sessionID, DefaultSessionName); err != nil {
-				slog.Error("Failed to save fallback session title", "error", err)
-			}
+		if titleSaved || keepExisting {
+			return
+		}
+		fallbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := a.sessions.Rename(fallbackCtx, sessionID, DefaultSessionName); err != nil {
+			slog.Error("Failed to save fallback session title", "error", err)
 		}
 	}()
 
@@ -1813,8 +1878,11 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 		}
 	}
 	if !success {
-		// The deferred fallback will save the default session name.
-		return
+		// The deferred fallback saves the default session name.
+		if err != nil {
+			return fmt.Errorf("failed to generate session title: %w", err)
+		}
+		return errors.New("failed to generate session title: every model hit the token limit")
 	}
 
 	// Clean up title.
@@ -1874,10 +1942,10 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 	// concurrent session updates.
 	saveErr := a.sessions.UpdateTitleAndUsage(ctx, sessionID, title, promptTokens, completionTokens, cost)
 	if saveErr != nil {
-		slog.Error("Failed to save session title and usage", "error", saveErr)
-		return
+		return fmt.Errorf("failed to save session title and usage: %w", saveErr)
 	}
 	titleSaved = true
+	return nil
 }
 
 func (a *sessionAgent) openrouterCost(metadata fantasy.ProviderMetadata) *float64 {

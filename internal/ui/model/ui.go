@@ -2233,6 +2233,19 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			return nil
 		})
 		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionRegenerateTitle:
+		if m.isAgentBusy() {
+			cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before regenerating the title..."))
+			break
+		}
+		sessionID := msg.SessionID
+		cmds = append(cmds, func() tea.Msg {
+			if err := m.com.Workspace.AgentRegenerateTitle(context.Background(), sessionID); err != nil {
+				return util.ReportError(err)()
+			}
+			return util.NewInfoMsg("Regenerated session title")
+		})
+		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionToggleHelp:
 		m.status.ToggleHelp()
 		m.dialog.CloseDialog(dialog.CommandsID)

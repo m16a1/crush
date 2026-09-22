@@ -588,6 +588,19 @@ func (c *Client) AgentSummarizeSession(ctx context.Context, id string, sessionID
 	return nil
 }
 
+// AgentRegenerateSessionTitle asks the server to regenerate a session title.
+func (c *Client) AgentRegenerateSessionTitle(ctx context.Context, id string, sessionID string) error {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/agent/sessions/%s/title", id, sessionID), nil, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to regenerate session title: %w", err)
+	}
+	defer rsp.Body.Close()
+	if rsp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to regenerate session title: status code %d", rsp.StatusCode)
+	}
+	return nil
+}
+
 // InitiateAgentProcessing triggers agent initialization on the server.
 func (c *Client) InitiateAgentProcessing(ctx context.Context, id string, interactive bool) error {
 	body := jsonBody(proto.AgentInitRequest{Interactive: interactive})

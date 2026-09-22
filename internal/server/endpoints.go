@@ -386,6 +386,14 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Fails(404, 500).
 			Handle(c.handlePostWorkspaceAgentSessionSummarize),
 
+		apigen.Post("/v1/workspaces/{id}/agent/sessions/{sid}/title").
+			Summary("Regenerate session title").
+			Tags("agent").
+			PathParam("id", "Workspace ID").
+			PathParam("sid", "Session ID").
+			Fails(404, 500).
+			Handle(c.handlePostWorkspaceAgentSessionRegenerateTitle),
+
 		apigen.Post("/v1/workspaces/{id}/agent/sessions/{sid}/shell").
 			Summary("Run shell command").
 			Description("Runs a shell command in the workspace on behalf of the session.").

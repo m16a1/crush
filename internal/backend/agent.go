@@ -217,6 +217,21 @@ func (b *Backend) SummarizeSession(ctx context.Context, workspaceID, sessionID s
 	return ws.AgentCoordinator.Summarize(ctx, sessionID)
 }
 
+// RegenerateSessionTitle generates a fresh title for the session from its
+// first prompt, leaving the current title in place if that fails.
+func (b *Backend) RegenerateSessionTitle(ctx context.Context, workspaceID, sessionID string) error {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return err
+	}
+
+	if ws.AgentCoordinator == nil {
+		return ErrAgentNotInitialized
+	}
+
+	return ws.AgentCoordinator.RegenerateTitle(ctx, sessionID)
+}
+
 // QueuedPrompts returns the number of queued prompts for the session.
 func (b *Backend) QueuedPrompts(workspaceID, sessionID string) (int, error) {
 	ws, err := b.GetWorkspace(workspaceID)

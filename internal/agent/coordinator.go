@@ -139,6 +139,7 @@ type Coordinator interface {
 	Model() Model
 	UpdateModels(ctx context.Context) error
 	GenerateTitle(ctx context.Context, sessionID, prompt string)
+	RegenerateTitle(ctx context.Context, sessionID string) error
 }
 
 type coordinator struct {
@@ -1452,6 +1453,16 @@ func (c *coordinator) GenerateTitle(ctx context.Context, sessionID, prompt strin
 		return
 	}
 	agent.GenerateTitle(ctx, sessionID, prompt)
+}
+
+// RegenerateTitle generates a fresh session title using the current agent,
+// leaving the existing title alone if it cannot.
+func (c *coordinator) RegenerateTitle(ctx context.Context, sessionID string) error {
+	agent := c.currentAgent()
+	if agent == nil {
+		return errors.New("agent not initialized")
+	}
+	return agent.RegenerateTitle(ctx, sessionID)
 }
 
 // refreshTokenIfExpired proactively refreshes the OAuth token if it has expired.

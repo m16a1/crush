@@ -155,6 +155,10 @@ type Workspace interface {
 	AgentClearQueue(sessionID string)
 	AgentSetMain(agentID string) error
 	AgentSummarize(ctx context.Context, sessionID string) error
+	// AgentRegenerateTitle replaces the session's title with a freshly
+	// generated one, leaving the current title in place if generation
+	// fails.
+	AgentRegenerateTitle(ctx context.Context, sessionID string) error
 	UpdateAgentModel(ctx context.Context) error
 	InitCoderAgent(ctx context.Context) error
 	InitCoderAgentNonInteractive(ctx context.Context) error
