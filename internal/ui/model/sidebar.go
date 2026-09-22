@@ -91,7 +91,8 @@ func (m *UI) updateSidebarScrollState() {
 	contentWidth := max(width-2, 1)
 
 	title := t.Sidebar.SessionTitle.Width(contentWidth).MaxHeight(2).Render(m.session.Title)
-	cwd := common.PrettyPath(t, m.com.Workspace.WorkingDir(), contentWidth)
+	workingDir := m.com.Workspace.WorkingDir()
+	cwd := common.PrettyPath(t, workingDir, contentWidth)
 	sidebarLogo := m.sidebarLogo
 	if height < logoHeightBreakpoint {
 		sidebarLogo = lipgloss.JoinVertical(lipgloss.Left, logo.SmallRender(m.com.Styles, contentWidth, logo.Opts{
@@ -108,28 +109,29 @@ func (m *UI) updateSidebarScrollState() {
 	contentHeight := contentRect.Dy()
 
 	// Render all items without truncation; virtual scrolling handles overflow.
-	lspSection := m.lspInfo(contentWidth, len(m.lspStates), true)
-	mcpSection := m.mcpInfo(contentWidth, mcpCount(m.com.Config().MCP.Sorted(), m.mcpStates), true)
-	skillsSection := m.skillsInfo(contentWidth, len(m.skillStatusItems()), true)
-	filesSection := m.filesInfo(m.com.Workspace.WorkingDir(), contentWidth, fileChangeCount(m.sessionFiles), true)
+	// A resource section with nothing to report is dropped entirely, so an
+	// idle session does not carry a stack of empty "None" blocks. Each count
+	// doubles as that section's maxItems.
+	filesCount := fileChangeCount(m.sessionFiles)
+	lspCount := len(m.lspStates)
+	mcpCnt := mcpCount(m.com.Config().MCP.Sorted(), m.mcpStates)
+	skillsCount := len(m.skillStatusItems())
 
 	// Build the scrollable content.
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		title,
-		"",
-		cwd,
-		"",
-		m.modelInfo(contentWidth),
-		"",
-		filesSection,
-		"",
-		lspSection,
-		"",
-		mcpSection,
-		"",
-		skillsSection,
-	)
+	blocks := []string{title, "", cwd, "", m.modelInfo(contentWidth)}
+	if filesCount > 0 {
+		blocks = append(blocks, "", m.filesInfo(workingDir, contentWidth, filesCount, true))
+	}
+	if lspCount > 0 {
+		blocks = append(blocks, "", m.lspInfo(contentWidth, lspCount, true))
+	}
+	if mcpCnt > 0 {
+		blocks = append(blocks, "", m.mcpInfo(contentWidth, mcpCnt, true))
+	}
+	if skillsCount > 0 {
+		blocks = append(blocks, "", m.skillsInfo(contentWidth, skillsCount, true))
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left, blocks...)
 
 	totalLines := strings.Count(content, "\n") + 1
 	m.sidebarContent = content
