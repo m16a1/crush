@@ -13,6 +13,7 @@ import (
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/util"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -171,9 +172,9 @@ func (m *Models) HandleMsg(msg tea.Msg) Action {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, m.keyMap.Close):
+		case keys.Matches(msg, m.keyMap.Close):
 			return ActionClose{}
-		case key.Matches(msg, m.keyMap.Previous):
+		case keys.Matches(msg, m.keyMap.Previous):
 			m.list.Focus()
 			if m.list.IsSelectedFirst() {
 				m.list.SelectLast()
@@ -181,7 +182,7 @@ func (m *Models) HandleMsg(msg tea.Msg) Action {
 				m.list.SelectPrev()
 			}
 			m.list.ScrollToSelected()
-		case key.Matches(msg, m.keyMap.Next):
+		case keys.Matches(msg, m.keyMap.Next):
 			m.list.Focus()
 			if m.list.IsSelectedLast() {
 				m.list.SelectFirst()
@@ -189,7 +190,7 @@ func (m *Models) HandleMsg(msg tea.Msg) Action {
 				m.list.SelectNext()
 			}
 			m.list.ScrollToSelected()
-		case key.Matches(msg, m.keyMap.Select, m.keyMap.Edit):
+		case keys.Matches(msg, m.keyMap.Select, m.keyMap.Edit):
 			selectedItem := m.list.SelectedItem()
 			if selectedItem == nil {
 				break
@@ -200,7 +201,7 @@ func (m *Models) HandleMsg(msg tea.Msg) Action {
 				break
 			}
 
-			isEdit := key.Matches(msg, m.keyMap.Edit)
+			isEdit := keys.Matches(msg, m.keyMap.Edit)
 
 			return ActionSelectModel{
 				Provider:       modelItem.prov,
@@ -208,7 +209,7 @@ func (m *Models) HandleMsg(msg tea.Msg) Action {
 				ModelType:      modelItem.SelectedModelType(),
 				ReAuthenticate: isEdit,
 			}
-		case key.Matches(msg, m.keyMap.Tab):
+		case keys.Matches(msg, m.keyMap.Tab):
 			if m.isOnboarding {
 				break
 			}

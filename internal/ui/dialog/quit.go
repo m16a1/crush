@@ -5,6 +5,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
@@ -72,20 +73,20 @@ func (q *Quit) HandleMsg(msg tea.Msg) Action {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, q.keyMap.Quit):
+		case keys.Matches(msg, q.keyMap.Quit):
 			return ActionQuit{}
-		case key.Matches(msg, q.keyMap.Close):
+		case keys.Matches(msg, q.keyMap.Close):
 			return ActionClose{}
-		case key.Matches(msg, q.keyMap.LeftRight, q.keyMap.Tab):
+		case keys.Matches(msg, q.keyMap.LeftRight, q.keyMap.Tab):
 			q.selectedNo = !q.selectedNo
-		case key.Matches(msg, q.keyMap.EnterSpace):
+		case keys.Matches(msg, q.keyMap.EnterSpace):
 			if !q.selectedNo {
 				return ActionQuit{}
 			}
 			return ActionClose{}
-		case key.Matches(msg, q.keyMap.Yes):
+		case keys.Matches(msg, q.keyMap.Yes):
 			return ActionQuit{}
-		case key.Matches(msg, q.keyMap.No, q.keyMap.Close):
+		case keys.Matches(msg, q.keyMap.No, q.keyMap.Close):
 			return ActionClose{}
 		}
 	}

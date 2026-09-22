@@ -13,6 +13,7 @@ import (
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/crush/internal/ui/util"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -123,14 +124,14 @@ func (m *APIKeyInput) HandleMsg(msg tea.Msg) Action {
 		switch {
 		case m.state == APIKeyInputStateVerifying:
 			// do nothing
-		case key.Matches(msg, m.keyMap.Close):
+		case keys.Matches(msg, m.keyMap.Close):
 			switch m.state {
 			case APIKeyInputStateVerified:
 				return m.saveKeyAndContinue()
 			default:
 				return ActionClose{}
 			}
-		case key.Matches(msg, m.keyMap.Submit):
+		case keys.Matches(msg, m.keyMap.Submit):
 			switch m.state {
 			case APIKeyInputStateInitial, APIKeyInputStateError:
 				return ActionChangeAPIKeyState{State: APIKeyInputStateVerifying}

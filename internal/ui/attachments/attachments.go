@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -46,15 +47,15 @@ func (m *Attachments) Update(msg tea.Msg) bool {
 		return true
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, m.keyMap.DeleteMode):
+		case keys.Matches(msg, m.keyMap.DeleteMode):
 			if len(m.list) > 0 {
 				m.deleting = true
 			}
 			return true
-		case m.deleting && key.Matches(msg, m.keyMap.Escape):
+		case m.deleting && keys.Matches(msg, m.keyMap.Escape):
 			m.deleting = false
 			return true
-		case m.deleting && key.Matches(msg, m.keyMap.DeleteAll):
+		case m.deleting && keys.Matches(msg, m.keyMap.DeleteAll):
 			m.deleting = false
 			m.list = nil
 			return true

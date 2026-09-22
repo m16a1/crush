@@ -16,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/crush/internal/commands"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/util"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -193,9 +194,9 @@ func (a *Arguments) HandleMsg(msg tea.Msg) Action {
 		}
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, a.keyMap.Close):
+		case keys.Matches(msg, a.keyMap.Close):
 			return ActionClose{}
-		case key.Matches(msg, a.keyMap.Confirm):
+		case keys.Matches(msg, a.keyMap.Confirm):
 			// If we're on the last input or there's only one input, submit.
 			if a.focused == len(a.inputs)-1 || len(a.inputs) == 1 {
 				args := make(map[string]string)
@@ -221,9 +222,9 @@ func (a *Arguments) HandleMsg(msg tea.Msg) Action {
 				}
 			}
 			a.focusInput(a.focused + 1)
-		case key.Matches(msg, a.keyMap.Next):
+		case keys.Matches(msg, a.keyMap.Next):
 			a.focusInput(a.focused + 1)
-		case key.Matches(msg, a.keyMap.Previous):
+		case keys.Matches(msg, a.keyMap.Previous):
 			a.focusInput(a.focused - 1)
 		default:
 			var cmd tea.Cmd

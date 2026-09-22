@@ -7,11 +7,11 @@ import (
 	"strings"
 	"sync"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/fsext"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/ordered"
@@ -302,26 +302,26 @@ func (c *Completions) Update(msg tea.KeyPressMsg) (tea.Msg, bool) {
 	}
 
 	switch {
-	case key.Matches(msg, c.keyMap.Up):
+	case keys.Matches(msg, c.keyMap.Up):
 		c.selectPrev()
 		return nil, true
 
-	case key.Matches(msg, c.keyMap.Down):
+	case keys.Matches(msg, c.keyMap.Down):
 		c.selectNext()
 		return nil, true
 
-	case key.Matches(msg, c.keyMap.UpInsert):
+	case keys.Matches(msg, c.keyMap.UpInsert):
 		c.selectPrev()
 		return c.selectCurrent(true), true
 
-	case key.Matches(msg, c.keyMap.DownInsert):
+	case keys.Matches(msg, c.keyMap.DownInsert):
 		c.selectNext()
 		return c.selectCurrent(true), true
 
-	case key.Matches(msg, c.keyMap.Select):
+	case keys.Matches(msg, c.keyMap.Select):
 		return c.selectCurrent(false), true
 
-	case key.Matches(msg, c.keyMap.Cancel):
+	case keys.Matches(msg, c.keyMap.Cancel):
 		c.Close()
 		return ClosedMsg{}, true
 	}

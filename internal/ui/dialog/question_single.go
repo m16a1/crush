@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/crush/internal/question"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -72,10 +73,10 @@ func (d *SingleChoice) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(msg, d.keyClose):
+	case keys.Matches(msg, d.keyClose):
 		d.answer(question.Answer{QuestionID: d.Request.ID})
 		return true, nil
-	case key.Matches(msg, d.keyEnter):
+	case keys.Matches(msg, d.keyEnter):
 		// In hover mode, act on the item under the mouse. Landing on
 		// the fill-in focuses it (mirroring a click) instead of
 		// submitting an empty answer.
@@ -87,7 +88,7 @@ func (d *SingleChoice) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		d.answer(d.respond())
 		return true, nil
-	case key.Matches(msg, d.keyNote) && !d.fillIn.Focused():
+	case keys.Matches(msg, d.keyNote) && !d.fillIn.Focused():
 		d.adoptHover()
 		return false, d.openNote(d.noteKey())
 	}

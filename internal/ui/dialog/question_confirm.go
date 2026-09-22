@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -79,24 +80,24 @@ func NewConfirmComponent(sty *styles.Styles, title, description string, labels [
 // here; QuestionForm intercepts them for tab navigation.
 func (c *ConfirmComponent) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch {
-	case key.Matches(msg, c.keyUp):
+	case keys.Matches(msg, c.keyUp):
 		if c.scrollOffset > 0 {
 			c.scrollOffset--
 		}
 		return false, nil
-	case key.Matches(msg, c.keyDown):
+	case keys.Matches(msg, c.keyDown):
 		c.scrollOffset++
 		return false, nil
-	case key.Matches(msg, c.keyLeft), key.Matches(msg, c.keyRight):
+	case keys.Matches(msg, c.keyLeft), keys.Matches(msg, c.keyRight):
 		c.confirmYes = !c.confirmYes
 		return false, nil
-	case key.Matches(msg, c.keyYes):
+	case keys.Matches(msg, c.keyYes):
 		c.confirmYes = true
 		return false, nil
-	case key.Matches(msg, c.keyNo):
+	case keys.Matches(msg, c.keyNo):
 		c.confirmYes = false
 		return false, nil
-	case key.Matches(msg, c.keyEnter):
+	case keys.Matches(msg, c.keyEnter):
 		if c.confirmYes {
 			if c.OnConfirm != nil {
 				c.OnConfirm()
@@ -107,7 +108,7 @@ func (c *ConfirmComponent) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			c.OnReject()
 		}
 		return false, nil
-	case key.Matches(msg, c.keyClose):
+	case keys.Matches(msg, c.keyClose):
 		if c.OnReject != nil {
 			c.OnReject()
 		}

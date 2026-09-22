@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -71,9 +72,9 @@ func (d *ThemeNew) HandleMsg(msg tea.Msg) Action {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, d.keyMap.Close):
+		case keys.Matches(msg, d.keyMap.Close):
 			return ActionClose{}
-		case key.Matches(msg, d.keyMap.Confirm):
+		case keys.Matches(msg, d.keyMap.Confirm):
 			name := strings.TrimSpace(d.input.Value())
 			if err := styles.ValidateThemeName(name); err != nil {
 				d.err = err.Error()

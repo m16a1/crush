@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -290,22 +291,22 @@ func (th *Theme) HandleMsg(msg tea.Msg) Action {
 		switch th.mode {
 		case themesModeDeleting:
 			switch {
-			case key.Matches(msg, th.keyMap.ConfirmDelete):
+			case keys.Matches(msg, th.keyMap.ConfirmDelete):
 				action := th.confirmDelete()
 				th.mode = themesModeNormal
 				th.setThemeItems()
 				return action
-			case key.Matches(msg, th.keyMap.CancelDelete):
+			case keys.Matches(msg, th.keyMap.CancelDelete):
 				th.mode = themesModeNormal
 				th.setThemeItems()
 			}
 		case themesModeRenaming:
 			switch {
-			case key.Matches(msg, th.keyMap.ConfirmRename):
+			case keys.Matches(msg, th.keyMap.ConfirmRename):
 				action := th.confirmRename()
 				th.setThemeItems()
 				return action
-			case key.Matches(msg, th.keyMap.CancelRename):
+			case keys.Matches(msg, th.keyMap.CancelRename):
 				th.mode = themesModeNormal
 				th.setThemeItems()
 			default:
@@ -319,9 +320,9 @@ func (th *Theme) HandleMsg(msg tea.Msg) Action {
 			}
 		default:
 			switch {
-			case key.Matches(msg, th.keyMap.Close):
+			case keys.Matches(msg, th.keyMap.Close):
 				return ActionRevertThemePreview{}
-			case key.Matches(msg, th.keyMap.EditTheme):
+			case keys.Matches(msg, th.keyMap.EditTheme):
 				selectedItem := th.list.SelectedItem()
 				if selectedItem == nil {
 					break
@@ -331,7 +332,7 @@ func (th *Theme) HandleMsg(msg tea.Msg) Action {
 					break
 				}
 				return ActionEditTheme{Name: themeItem.name}
-			case key.Matches(msg, th.keyMap.Rename):
+			case keys.Matches(msg, th.keyMap.Rename):
 				selectedItem := th.list.SelectedItem()
 				if selectedItem == nil {
 					break
@@ -346,14 +347,14 @@ func (th *Theme) HandleMsg(msg tea.Msg) Action {
 				th.selectedIndex = th.list.Selected()
 				th.mode = themesModeRenaming
 				th.setThemeItems()
-			case key.Matches(msg, th.keyMap.Delete):
+			case keys.Matches(msg, th.keyMap.Delete):
 				if !th.canDeleteSelected() {
 					break
 				}
 				th.selectedIndex = th.list.Selected()
 				th.mode = themesModeDeleting
 				th.setThemeItems()
-			case key.Matches(msg, th.keyMap.Revert):
+			case keys.Matches(msg, th.keyMap.Revert):
 				selectedItem := th.list.SelectedItem()
 				if selectedItem == nil {
 					break
@@ -363,17 +364,17 @@ func (th *Theme) HandleMsg(msg tea.Msg) Action {
 					break
 				}
 				return ActionRevertOverriddenTheme{Name: themeItem.name}
-			case key.Matches(msg, th.keyMap.Previous):
+			case keys.Matches(msg, th.keyMap.Previous):
 				th.list.Focus()
 				th.selectPrevTheme()
 				th.list.ScrollToSelected()
 				return th.previewAction()
-			case key.Matches(msg, th.keyMap.Next):
+			case keys.Matches(msg, th.keyMap.Next):
 				th.list.Focus()
 				th.selectNextTheme()
 				th.list.ScrollToSelected()
 				return th.previewAction()
-			case key.Matches(msg, th.keyMap.Select):
+			case keys.Matches(msg, th.keyMap.Select):
 				selectedItem := th.list.SelectedItem()
 				if selectedItem == nil {
 					break

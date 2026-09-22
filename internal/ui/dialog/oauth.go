@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/util"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/pkg/browser"
@@ -139,15 +140,15 @@ func (m *OAuth) HandleMsg(msg tea.Msg) Action {
 
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, m.keyMap.Copy):
+		case keys.Matches(msg, m.keyMap.Copy):
 			cmd := m.copyCode()
 			return ActionCmd{cmd}
 
-		case key.Matches(msg, m.keyMap.CopyURL):
+		case keys.Matches(msg, m.keyMap.CopyURL):
 			cmd := m.copyURL()
 			return ActionCmd{cmd}
 
-		case key.Matches(msg, m.keyMap.Submit):
+		case keys.Matches(msg, m.keyMap.Submit):
 			switch m.State {
 			case OAuthStateSuccess:
 				return m.confirmAndSelectModel()
@@ -161,7 +162,7 @@ func (m *OAuth) HandleMsg(msg tea.Msg) Action {
 				return ActionCmd{cmd}
 			}
 
-		case key.Matches(msg, m.keyMap.Close):
+		case keys.Matches(msg, m.keyMap.Close):
 			switch m.State {
 			case OAuthStateSuccess:
 				return m.confirmAndSelectModel()

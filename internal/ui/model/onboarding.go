@@ -5,12 +5,12 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/charmbracelet/crush/internal/home"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/util"
 )
 
@@ -31,17 +31,17 @@ func (m *UI) markProjectInitializedCmd() tea.Cmd {
 // updateInitializeView handles keyboard input for the project initialization prompt.
 func (m *UI) updateInitializeView(msg tea.KeyPressMsg) (cmds []tea.Cmd) {
 	switch {
-	case key.Matches(msg, m.keyMap.Initialize.Enter):
+	case keys.Matches(msg, m.keyMap.Initialize.Enter):
 		if m.onboarding.yesInitializeSelected {
 			cmds = append(cmds, m.initializeProject())
 		} else {
 			cmds = append(cmds, m.skipInitializeProject())
 		}
-	case key.Matches(msg, m.keyMap.Initialize.Switch):
+	case keys.Matches(msg, m.keyMap.Initialize.Switch):
 		m.onboarding.yesInitializeSelected = !m.onboarding.yesInitializeSelected
-	case key.Matches(msg, m.keyMap.Initialize.Yes):
+	case keys.Matches(msg, m.keyMap.Initialize.Yes):
 		cmds = append(cmds, m.initializeProject())
-	case key.Matches(msg, m.keyMap.Initialize.No):
+	case keys.Matches(msg, m.keyMap.Initialize.No):
 		cmds = append(cmds, m.skipInitializeProject())
 	}
 	return cmds

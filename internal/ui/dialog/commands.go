@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/crush/internal/commands"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -185,9 +186,9 @@ func (c *Commands) HandleMsg(msg tea.Msg) Action {
 		}
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, c.keyMap.Close):
+		case keys.Matches(msg, c.keyMap.Close):
 			return ActionClose{}
-		case key.Matches(msg, c.keyMap.Previous):
+		case keys.Matches(msg, c.keyMap.Previous):
 			c.list.Focus()
 			if c.list.IsSelectedFirst() {
 				c.list.SelectLast()
@@ -195,7 +196,7 @@ func (c *Commands) HandleMsg(msg tea.Msg) Action {
 				c.list.SelectPrev()
 			}
 			c.list.ScrollToSelected()
-		case key.Matches(msg, c.keyMap.Next):
+		case keys.Matches(msg, c.keyMap.Next):
 			c.list.Focus()
 			if c.list.IsSelectedLast() {
 				c.list.SelectFirst()
@@ -203,18 +204,18 @@ func (c *Commands) HandleMsg(msg tea.Msg) Action {
 				c.list.SelectNext()
 			}
 			c.list.ScrollToSelected()
-		case key.Matches(msg, c.keyMap.Select):
+		case keys.Matches(msg, c.keyMap.Select):
 			if selectedItem := c.list.SelectedItem(); selectedItem != nil {
 				if item, ok := selectedItem.(*CommandItem); ok && item != nil {
 					return item.Action()
 				}
 			}
-		case key.Matches(msg, c.keyMap.Tab):
+		case keys.Matches(msg, c.keyMap.Tab):
 			if len(c.customCommands) > 0 || len(c.mcpPrompts) > 0 {
 				c.selected = c.nextCommandType()
 				c.setCommandItems(c.selected)
 			}
-		case key.Matches(msg, c.keyMap.ShiftTab):
+		case keys.Matches(msg, c.keyMap.ShiftTab):
 			if len(c.customCommands) > 0 || len(c.mcpPrompts) > 0 {
 				c.selected = c.previousCommandType()
 				c.setCommandItems(c.selected)

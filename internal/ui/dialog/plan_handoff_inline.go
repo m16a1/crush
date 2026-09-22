@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -137,19 +138,19 @@ func (p *PlanHandoffInline) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if p.editing {
 		p.clearSelection()
 		switch {
-		case key.Matches(msg, p.keyClose):
+		case keys.Matches(msg, p.keyClose):
 			p.editing = false
 			p.editor.Blur()
 			p.heightChanged = true
 			return false, nil
-		case key.Matches(msg, p.keyNewline):
+		case keys.Matches(msg, p.keyNewline):
 			previousHeight := p.editor.Height()
 			p.editor.InsertRune('\n')
 			var cmd tea.Cmd
 			p.editor, cmd = p.editor.Update(msg)
 			p.heightChanged = p.heightChanged || previousHeight != p.editor.Height()
 			return false, cmd
-		case key.Matches(msg, p.keyEnter):
+		case keys.Matches(msg, p.keyEnter):
 			feedback := strings.TrimSpace(p.editor.Value())
 			if feedback == "" {
 				return false, nil
@@ -168,26 +169,26 @@ func (p *PlanHandoffInline) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(msg, p.keyClose):
+	case keys.Matches(msg, p.keyClose):
 		return false, func() tea.Msg { return CollapseInlineMsg{} }
-	case key.Matches(msg, p.keyNo):
+	case keys.Matches(msg, p.keyNo):
 		return false, p.startEditing()
-	case key.Matches(msg, p.keyLeftRight):
+	case keys.Matches(msg, p.keyLeftRight):
 		delta := 1
 		if msg.String() == "left" || msg.String() == "h" {
 			delta = choiceCount - 1
 		}
 		p.selectedChoice = (p.selectedChoice + delta) % choiceCount
 		return false, nil
-	case key.Matches(msg, p.keyEnter):
+	case keys.Matches(msg, p.keyEnter):
 		if p.selectedChoice == choiceRevisePlan {
 			return false, p.startEditing()
 		}
 		return true, p.runConfirm()
-	case key.Matches(msg, p.keyCoding):
+	case keys.Matches(msg, p.keyCoding):
 		p.selectedChoice = choiceStartCoding
 		return true, p.runConfirm()
-	case key.Matches(msg, p.keyYolo):
+	case keys.Matches(msg, p.keyYolo):
 		p.selectedChoice = choiceCodeYOLO
 		return true, p.runConfirm()
 	}

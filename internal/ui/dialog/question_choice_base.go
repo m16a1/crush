@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -162,10 +163,10 @@ func (c *choiceList) adoptHover() {
 // caller should not process the key further.
 func (c *choiceList) handleFillInKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch {
-	case key.Matches(msg, c.keyClose):
+	case keys.Matches(msg, c.keyClose):
 		c.fillIn.Blur()
 		return nil, true
-	case key.Matches(msg, c.navUp):
+	case keys.Matches(msg, c.navUp):
 		// Arrows move relative to the fill-in the user is editing,
 		// not a choice the mouse happens to hover, so drop hover mode
 		// before navigating.
@@ -176,7 +177,7 @@ func (c *choiceList) handleFillInKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			return c.fillIn.Focus(), true
 		}
 		return nil, true
-	case key.Matches(msg, c.navDown):
+	case keys.Matches(msg, c.navDown):
 		c.mouseActive = false
 		c.moveDown()
 		if c.isFillIn() {
@@ -199,13 +200,13 @@ func (c *choiceList) handleFillInKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // fill-in is NOT focused. Returns true if the key was consumed.
 func (c *choiceList) handleNavKey(msg tea.KeyPressMsg) bool {
 	switch {
-	case key.Matches(msg, c.keyUp):
+	case keys.Matches(msg, c.keyUp):
 		c.moveUp()
 		if c.isFillIn() {
 			c.fillIn.Focus()
 		}
 		return true
-	case key.Matches(msg, c.keyDown):
+	case keys.Matches(msg, c.keyDown):
 		c.moveDown()
 		if c.isFillIn() {
 			c.fillIn.Focus()
@@ -717,11 +718,11 @@ func (c *choiceList) handleFillInFocused(
 	if !c.isFillIn() || !c.fillIn.Focused() {
 		return false, nil, false
 	}
-	if key.Matches(msg, c.keyClose) {
+	if keys.Matches(msg, c.keyClose) {
 		done, cmd := onClose()
 		return done, cmd, true
 	}
-	if key.Matches(msg, doneKey) {
+	if keys.Matches(msg, doneKey) {
 		done, cmd := onDone()
 		return done, cmd, true
 	}

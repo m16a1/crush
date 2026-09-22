@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -65,10 +66,10 @@ func NewFreeText(sty *styles.Styles, req question.Question) *FreeText {
 func (d *FreeText) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	d.wheelActive = false
 	switch {
-	case key.Matches(msg, d.keyClose):
+	case keys.Matches(msg, d.keyClose):
 		d.answer(question.Answer{QuestionID: d.Request.ID})
 		return true, nil
-	case key.Matches(msg, d.keyEnter):
+	case keys.Matches(msg, d.keyEnter):
 		val := strings.TrimSpace(d.editor.Value())
 		if val != "" {
 			d.answer(question.Answer{
@@ -78,7 +79,7 @@ func (d *FreeText) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		return false, nil
-	case key.Matches(msg, d.keyNewline):
+	case keys.Matches(msg, d.keyNewline):
 		d.editor.InsertRune('\n')
 		return false, nil
 	default:

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -114,9 +115,9 @@ func (r *Reasoning) HandleMsg(msg tea.Msg) Action {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, r.keyMap.Close):
+		case keys.Matches(msg, r.keyMap.Close):
 			return ActionClose{}
-		case key.Matches(msg, r.keyMap.Previous):
+		case keys.Matches(msg, r.keyMap.Previous):
 			r.list.Focus()
 			if r.list.IsSelectedFirst() {
 				r.list.SelectLast()
@@ -125,7 +126,7 @@ func (r *Reasoning) HandleMsg(msg tea.Msg) Action {
 			}
 			r.list.SelectPrev()
 			r.list.ScrollToSelected()
-		case key.Matches(msg, r.keyMap.Next):
+		case keys.Matches(msg, r.keyMap.Next):
 			r.list.Focus()
 			if r.list.IsSelectedLast() {
 				r.list.SelectFirst()
@@ -134,7 +135,7 @@ func (r *Reasoning) HandleMsg(msg tea.Msg) Action {
 			}
 			r.list.SelectNext()
 			r.list.ScrollToSelected()
-		case key.Matches(msg, r.keyMap.Select):
+		case keys.Matches(msg, r.keyMap.Select):
 			selectedItem := r.list.SelectedItem()
 			if selectedItem == nil {
 				break

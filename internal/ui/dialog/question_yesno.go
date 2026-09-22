@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -62,22 +63,22 @@ func (d *YesNo) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(msg, CloseKey):
+	case keys.Matches(msg, CloseKey):
 		d.answer(question.Answer{QuestionID: d.Request.ID})
 		return true, nil
-	case key.Matches(msg, d.keyLeftRight):
+	case keys.Matches(msg, d.keyLeftRight):
 		d.selectedNo = !d.selectedNo
 		return false, nil
-	case key.Matches(msg, d.keyEnter):
+	case keys.Matches(msg, d.keyEnter):
 		d.answer(d.respond(!d.selectedNo))
 		return true, nil
-	case key.Matches(msg, d.keyYes):
+	case keys.Matches(msg, d.keyYes):
 		d.answer(d.respond(true))
 		return true, nil
-	case key.Matches(msg, d.keyNo):
+	case keys.Matches(msg, d.keyNo):
 		d.answer(d.respond(false))
 		return true, nil
-	case key.Matches(msg, d.keyNote):
+	case keys.Matches(msg, d.keyNote):
 		return false, d.openNote("_question")
 	}
 	return false, nil

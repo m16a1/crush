@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/pkg/browser"
@@ -120,7 +121,7 @@ func (m *AWSSSO) HandleMsg(msg tea.Msg) Action {
 
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, m.keyMap.Open):
+		case keys.Matches(msg, m.keyMap.Open):
 			if m.state == awsSSOStateWaiting && m.url != "" {
 				return ActionCmd{m.openURLCmd()}
 			}
@@ -128,7 +129,7 @@ func (m *AWSSSO) HandleMsg(msg tea.Msg) Action {
 				return ActionClose{}
 			}
 
-		case key.Matches(msg, m.keyMap.Close):
+		case keys.Matches(msg, m.keyMap.Close):
 			return ActionClose{}
 		}
 	}

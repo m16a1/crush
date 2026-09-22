@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
@@ -116,12 +117,12 @@ func (m *AuthMethod) HandleMsg(msg tea.Msg) Action {
 	}
 
 	switch {
-	case key.Matches(keyMsg, m.keyMap.Close):
+	case keys.Matches(keyMsg, m.keyMap.Close):
 		return ActionClose{}
-	case key.Matches(keyMsg, m.keyMap.Choose):
+	case keys.Matches(keyMsg, m.keyMap.Choose):
 		m.selected = 1 - m.selected
 		return nil
-	case key.Matches(keyMsg, m.keyMap.Select):
+	case keys.Matches(keyMsg, m.keyMap.Select):
 		return ActionSelectAuthMethod{
 			Provider:  m.provider,
 			Model:     m.model,

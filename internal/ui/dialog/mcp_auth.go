@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	mcptools "github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/pkg/browser"
 )
@@ -122,7 +123,7 @@ func (m *MCPAuth) HandleMsg(msg tea.Msg) Action {
 
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, m.keyMap.Submit):
+		case keys.Matches(msg, m.keyMap.Submit):
 			switch m.state {
 			case MCPAuthStatePrompt:
 				return m.startAuth()
@@ -131,7 +132,7 @@ func (m *MCPAuth) HandleMsg(msg tea.Msg) Action {
 			case MCPAuthStateSuccess:
 				return m.advance()
 			}
-		case key.Matches(msg, m.keyMap.Copy):
+		case keys.Matches(msg, m.keyMap.Copy):
 			// Copy whatever URL is available without opening a browser.
 			// During authentication the authorization URL exists; during
 			// prompt we fall back to the server URL. Starting the flow
@@ -142,11 +143,11 @@ func (m *MCPAuth) HandleMsg(msg tea.Msg) Action {
 			if u := m.currentServer().URL; u != "" {
 				return ActionCmd{common.CopyToClipboard(u, "URL copied to clipboard")}
 			}
-		case key.Matches(msg, m.keyMap.Skip):
+		case keys.Matches(msg, m.keyMap.Skip):
 			if m.state == MCPAuthStatePrompt {
 				return m.advance()
 			}
-		case key.Matches(msg, m.keyMap.Close):
+		case keys.Matches(msg, m.keyMap.Close):
 			m.CancelAuth()
 			return ActionClose{}
 		}

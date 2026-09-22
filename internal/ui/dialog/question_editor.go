@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -96,14 +97,14 @@ func (e *questionEditor) closeNote(noteKey string) {
 // key so the caller can control what happens after closing.
 func (e *questionEditor) handleNoteKey(msg tea.KeyPressMsg, closeKey key.Binding, onClose func()) (tea.Cmd, bool) {
 	switch {
-	case key.Matches(msg, closeKey):
+	case keys.Matches(msg, closeKey):
 		onClose()
 		return nil, true
-	case key.Matches(msg, e.navUp), key.Matches(msg, e.navDown):
+	case keys.Matches(msg, e.navUp), keys.Matches(msg, e.navDown):
 		onClose()
 		return nil, false
 	default:
-		if key.Matches(msg, key.NewBinding(key.WithKeys("enter"))) {
+		if keys.Matches(msg, key.NewBinding(key.WithKeys("enter"))) {
 			onClose()
 			return nil, true
 		}

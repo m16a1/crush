@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -84,15 +85,15 @@ func (ed *ThemeEditor) HandleMsg(msg tea.Msg) Action {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, ed.keyMap.Close):
+		case keys.Matches(msg, ed.keyMap.Close):
 			return ActionRevertThemePalette{}
-		case key.Matches(msg, ed.keyMap.Save):
+		case keys.Matches(msg, ed.keyMap.Save):
 			ed.applyInput()
 			if ed.invalid {
 				return nil
 			}
 			return ActionSaveThemePalette{Name: ed.name, Base: ed.base, Palette: ed.palette}
-		case key.Matches(msg, ed.keyMap.Previous):
+		case keys.Matches(msg, ed.keyMap.Previous):
 			ed.applyInput()
 			if ed.index == 0 {
 				ed.index = len(ed.slots) - 1
@@ -102,7 +103,7 @@ func (ed *ThemeEditor) HandleMsg(msg tea.Msg) Action {
 			ed.syncInput()
 			ed.keepSelectedVisible(0)
 			return ActionPreviewThemePalette{Base: ed.base, Palette: ed.palette}
-		case key.Matches(msg, ed.keyMap.Next):
+		case keys.Matches(msg, ed.keyMap.Next):
 			ed.applyInput()
 			ed.index = (ed.index + 1) % len(ed.slots)
 			ed.syncInput()

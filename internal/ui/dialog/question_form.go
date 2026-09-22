@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -203,10 +204,10 @@ func (f *QuestionForm) firstUnanswered() int {
 func (f *QuestionForm) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// Tab navigation works on all tabs including confirm.
 	switch {
-	case key.Matches(msg, f.keyNextTab):
+	case keys.Matches(msg, f.keyNextTab):
 		f.switchTab(f.activeIdx + 1)
 		return false, nil
-	case key.Matches(msg, f.keyPrevTab):
+	case keys.Matches(msg, f.keyPrevTab):
 		f.switchTab(f.activeIdx - 1)
 		return false, nil
 	}
@@ -221,7 +222,7 @@ func (f *QuestionForm) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	// Global keys for question tabs.
-	if key.Matches(msg, f.keyClose) {
+	if keys.Matches(msg, f.keyClose) {
 		f.cancel()
 		return true, nil
 	}

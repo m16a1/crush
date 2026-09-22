@@ -53,6 +53,7 @@ import (
 	"github.com/charmbracelet/crush/internal/ui/completions"
 	"github.com/charmbracelet/crush/internal/ui/dialog"
 	fimage "github.com/charmbracelet/crush/internal/ui/image"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/logo"
 	"github.com/charmbracelet/crush/internal/ui/notification"
 	"github.com/charmbracelet/crush/internal/ui/styles"
@@ -3031,70 +3032,70 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 
 	handleGlobalKeys := func(msg tea.KeyPressMsg) bool {
 		switch {
-		case key.Matches(msg, m.keyMap.Help):
+		case keys.Matches(msg, m.keyMap.Help):
 			m.status.ToggleHelp()
 			m.updateLayoutAndSize()
 			return true
-		case key.Matches(msg, m.keyMap.Commands):
+		case keys.Matches(msg, m.keyMap.Commands):
 			if cmd := m.openCommandsDialog(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 			return true
-		case key.Matches(msg, m.keyMap.Models):
+		case keys.Matches(msg, m.keyMap.Models):
 			if cmd := m.openModelsDialog(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 			return true
-		case key.Matches(msg, m.keyMap.Sessions):
+		case keys.Matches(msg, m.keyMap.Sessions):
 			if cmd := m.openSessionsDialog(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 			return true
-		case key.Matches(msg, m.keyMap.ResendPrompt):
+		case keys.Matches(msg, m.keyMap.ResendPrompt):
 			if m.state == uiChat && m.hasSession() {
 				cmds = append(cmds, m.resendLastPrompt())
 				return true
 			}
-		case key.Matches(msg, m.keyMap.Chat.Details) && m.isCompact:
+		case keys.Matches(msg, m.keyMap.Chat.Details) && m.isCompact:
 			m.detailsOpen = !m.detailsOpen
 			m.updateLayoutAndSize()
 			return true
-		case key.Matches(msg, m.keyMap.Chat.EndFollow):
+		case keys.Matches(msg, m.keyMap.Chat.EndFollow):
 			if m.state == uiChat && m.hasSession() {
 				if cmd := m.chat.ScrollToBottomAndSelectLast(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				return true
 			}
-		case key.Matches(msg, m.keyMap.Chat.TogglePills):
+		case keys.Matches(msg, m.keyMap.Chat.TogglePills):
 			if m.state == uiChat && m.hasSession() {
 				if cmd := m.togglePillsExpanded(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				return true
 			}
-		case key.Matches(msg, m.keyMap.Chat.PillLeft):
+		case keys.Matches(msg, m.keyMap.Chat.PillLeft):
 			if m.state == uiChat && m.hasSession() && m.pillsExpanded && m.focus != uiFocusEditor {
 				if cmd := m.switchPillSection(-1); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				return true
 			}
-		case key.Matches(msg, m.keyMap.Chat.PillRight):
+		case keys.Matches(msg, m.keyMap.Chat.PillRight):
 			if m.state == uiChat && m.hasSession() && m.pillsExpanded && m.focus != uiFocusEditor {
 				if cmd := m.switchPillSection(1); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				return true
 			}
-		case key.Matches(msg, m.keyMap.Suspend):
+		case keys.Matches(msg, m.keyMap.Suspend):
 			if m.isAgentBusy() {
 				cmds = append(cmds, util.ReportWarn("Agent is busy, please wait..."))
 				return true
 			}
 			cmds = append(cmds, tea.Suspend)
 			return true
-		case key.Matches(msg, m.keyMap.ToggleYolo):
+		case keys.Matches(msg, m.keyMap.ToggleYolo):
 			if m.mode == uiInputModePlan {
 				// YOLO has no meaning while planning; activating it
 				// switches straight to YOLO coding.
@@ -3114,7 +3115,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 		return false
 	}
 
-	if key.Matches(msg, m.keyMap.Quit) && !m.dialog.ContainsDialog(dialog.QuitID) {
+	if keys.Matches(msg, m.keyMap.Quit) && !m.dialog.ContainsDialog(dialog.QuitID) {
 		// Always handle quit keys first
 		if cmd := m.openQuitDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -3131,7 +3132,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 	// Tab always toggles focus between editor and chat, even when
 	// an inline editor is active. This lets users collapse the
 	// question form to view chat.
-	if m.activeInline != nil && key.Matches(msg, m.keyMap.Tab) {
+	if m.activeInline != nil && keys.Matches(msg, m.keyMap.Tab) {
 		if m.focus == uiFocusEditor {
 			m.focusActiveInline(uiFocusMain)
 		} else {
@@ -3166,7 +3167,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	// Handle cancel key when agent is busy.
-	if key.Matches(msg, m.keyMap.Chat.Cancel) {
+	if keys.Matches(msg, m.keyMap.Chat.Cancel) {
 		if m.isAgentBusy() {
 			if cmd := m.cancelAgent(); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -3210,11 +3211,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			}
 
 			switch {
-			case key.Matches(msg, m.keyMap.ShiftTab):
+			case keys.Matches(msg, m.keyMap.ShiftTab):
 				if cmd := m.toggleInputMode(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			case key.Matches(msg, m.keyMap.Editor.AddImage):
+			case keys.Matches(msg, m.keyMap.Editor.AddImage):
 				if !m.currentModelSupportsImages() {
 					break
 				}
@@ -3222,15 +3223,15 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					cmds = append(cmds, cmd)
 				}
 
-			case key.Matches(msg, m.keyMap.Editor.PasteImage):
+			case keys.Matches(msg, m.keyMap.Editor.PasteImage):
 				if !m.currentModelSupportsImages() {
 					break
 				}
 				cmds = append(cmds, m.pasteImageFromClipboard)
-			case key.Matches(msg, m.keyMap.Editor.PasteText):
+			case keys.Matches(msg, m.keyMap.Editor.PasteText):
 				cmds = append(cmds, m.pasteTextFromClipboard)
 
-			case key.Matches(msg, m.keyMap.Editor.SendMessage):
+			case keys.Matches(msg, m.keyMap.Editor.SendMessage):
 				if m.modeSwitching {
 					cmds = append(cmds, util.ReportInfo("Switching input mode, one moment..."))
 					break
@@ -3280,7 +3281,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				m.historyReset()
 
 				return tea.Batch(m.sendMessage(value, attachments...), m.loadPromptHistory())
-			case key.Matches(msg, m.keyMap.Chat.NewSession):
+			case keys.Matches(msg, m.keyMap.Chat.NewSession):
 				if !m.hasSession() {
 					break
 				}
@@ -3291,14 +3292,14 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				if cmd := m.newSession(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			case key.Matches(msg, m.keyMap.Tab):
+			case keys.Matches(msg, m.keyMap.Tab):
 				if m.state != uiLanding {
 					m.setState(m.state, uiFocusMain)
 					m.textarea.Blur()
 					m.chat.Focus()
 					m.chat.SetSelected(m.chat.Len() - 1)
 				}
-			case key.Matches(msg, m.keyMap.Editor.OpenEditor):
+			case keys.Matches(msg, m.keyMap.Editor.OpenEditor):
 				if m.isAgentBusy() {
 					cmds = append(cmds, util.ReportWarn("Agent is working, please wait..."))
 					break
@@ -3308,12 +3309,12 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					editorValue = "!" + editorValue
 				}
 				cmds = append(cmds, m.openEditor(editorValue))
-			case key.Matches(msg, m.keyMap.Editor.Newline):
+			case keys.Matches(msg, m.keyMap.Editor.Newline):
 				prevHeight := m.textarea.Height()
 				m.textarea.InsertRune('\n')
 				m.closeCompletions()
 				cmds = append(cmds, m.updateTextareaWithPrevHeight(msg, prevHeight))
-			case key.Matches(msg, m.keyMap.Editor.CopySelection):
+			case keys.Matches(msg, m.keyMap.Editor.CopySelection):
 				if m.textarea.HasSelection() {
 					cmds = append(cmds, common.CopyToClipboardWithCallback(
 						m.textarea.SelectedText(),
@@ -3322,7 +3323,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					))
 					m.textarea.ClearSelection()
 				}
-			case key.Matches(msg, m.keyMap.Editor.CutSelection):
+			case keys.Matches(msg, m.keyMap.Editor.CutSelection):
 				if m.textarea.HasSelection() {
 					cmds = append(cmds, common.CopyToClipboardWithCallback(
 						m.textarea.SelectedText(),
@@ -3331,22 +3332,22 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					))
 					m.textarea.DeleteSelection()
 				}
-			case key.Matches(msg, m.keyMap.Editor.HistoryPrev):
+			case keys.Matches(msg, m.keyMap.Editor.HistoryPrev):
 				cmd := m.handleHistoryUp(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			case key.Matches(msg, m.keyMap.Editor.HistoryNext):
+			case keys.Matches(msg, m.keyMap.Editor.HistoryNext):
 				cmd := m.handleHistoryDown(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			case key.Matches(msg, m.keyMap.Editor.Escape):
+			case keys.Matches(msg, m.keyMap.Editor.Escape):
 				cmd := m.handleHistoryEscape(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			case key.Matches(msg, m.keyMap.Editor.Commands) && m.textarea.Value() == "":
+			case keys.Matches(msg, m.keyMap.Editor.Commands) && m.textarea.Value() == "":
 				if cmd := m.openCommandsDialog(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
@@ -3446,21 +3447,21 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			}
 		case uiFocusMain:
 			switch {
-			case key.Matches(msg, m.keyMap.ShiftTab):
+			case keys.Matches(msg, m.keyMap.ShiftTab):
 				if cmd := m.toggleInputMode(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			case key.Matches(msg, m.keyMap.Tab):
+			case keys.Matches(msg, m.keyMap.Tab):
 				m.focus = uiFocusEditor
 				m.sidebarScrollbarVisible = false
 				cmds = append(cmds, m.textarea.Focus())
 				m.chat.Blur()
-			case key.Matches(msg, m.keyMap.Chat.FocusSidebar):
+			case keys.Matches(msg, m.keyMap.Chat.FocusSidebar):
 				if m.state == uiChat && !m.isCompact && m.hasSession() && m.sidebarScrollable {
 					m.focus = uiFocusSidebar
 					m.chat.Blur()
 				}
-			case key.Matches(msg, m.keyMap.Chat.NewSession):
+			case keys.Matches(msg, m.keyMap.Chat.NewSession):
 				if !m.hasSession() {
 					break
 				}
@@ -3472,48 +3473,48 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				if cmd := m.newSession(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-			case key.Matches(msg, m.keyMap.Chat.Expand):
+			case keys.Matches(msg, m.keyMap.Chat.Expand):
 				m.chat.ToggleExpandedSelectedItem()
-			case key.Matches(msg, m.keyMap.Chat.Up):
+			case keys.Matches(msg, m.keyMap.Chat.Up):
 				m.markScrollOnly()
 				m.chat.ScrollBy(-1)
 				if !m.chat.SelectedItemInView() {
 					m.chat.SelectPrev()
 					m.chat.ScrollToSelected()
 				}
-			case key.Matches(msg, m.keyMap.Chat.Down):
+			case keys.Matches(msg, m.keyMap.Chat.Down):
 				m.markScrollOnly()
 				m.chat.ScrollBy(1)
 				if !m.chat.SelectedItemInView() {
 					m.chat.SelectNext()
 					m.chat.ScrollToSelected()
 				}
-			case key.Matches(msg, m.keyMap.Chat.UpOneItem):
+			case keys.Matches(msg, m.keyMap.Chat.UpOneItem):
 				m.chat.SelectPrev()
 				m.chat.ScrollToSelected()
-			case key.Matches(msg, m.keyMap.Chat.DownOneItem):
+			case keys.Matches(msg, m.keyMap.Chat.DownOneItem):
 				m.chat.SelectNext()
 				m.chat.ScrollToSelected()
-			case key.Matches(msg, m.keyMap.Chat.HalfPageUp):
+			case keys.Matches(msg, m.keyMap.Chat.HalfPageUp):
 				m.markScrollOnly()
 				m.chat.ScrollBy(-m.chat.Height() / 2)
 				m.chat.SelectFirstInView()
-			case key.Matches(msg, m.keyMap.Chat.HalfPageDown):
+			case keys.Matches(msg, m.keyMap.Chat.HalfPageDown):
 				m.markScrollOnly()
 				m.chat.ScrollBy(m.chat.Height() / 2)
 				m.chat.SelectLastInView()
-			case key.Matches(msg, m.keyMap.Chat.PageUp):
+			case keys.Matches(msg, m.keyMap.Chat.PageUp):
 				m.markScrollOnly()
 				m.chat.ScrollBy(-m.chat.Height())
 				m.chat.SelectFirstInView()
-			case key.Matches(msg, m.keyMap.Chat.PageDown):
+			case keys.Matches(msg, m.keyMap.Chat.PageDown):
 				m.markScrollOnly()
 				m.chat.ScrollBy(m.chat.Height())
 				m.chat.SelectLastInView()
-			case key.Matches(msg, m.keyMap.Chat.Home):
+			case keys.Matches(msg, m.keyMap.Chat.Home):
 				m.chat.ScrollToTop()
 				m.chat.SelectFirst()
-			case key.Matches(msg, m.keyMap.Chat.End):
+			case keys.Matches(msg, m.keyMap.Chat.End):
 				m.chat.ScrollToBottomAndSelectLast()
 			default:
 				if ok, cmd := m.chat.HandleKeyMsg(msg); ok {
@@ -3527,26 +3528,26 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				break
 			}
 			switch {
-			case key.Matches(msg, m.keyMap.Chat.Up):
+			case keys.Matches(msg, m.keyMap.Chat.Up):
 				m.sidebarOffset = max(0, m.sidebarOffset-4)
 				m.sidebarScrollbarSeq++
-			case key.Matches(msg, m.keyMap.Chat.Down):
+			case keys.Matches(msg, m.keyMap.Chat.Down):
 				maxOffset := m.sidebarMaxOffsetVal
 				if m.sidebarOffset < maxOffset {
 					m.sidebarOffset = min(m.sidebarOffset+4, maxOffset)
 					m.sidebarScrollbarSeq++
 				}
-			case key.Matches(msg, m.keyMap.Chat.Home):
+			case keys.Matches(msg, m.keyMap.Chat.Home):
 				m.sidebarOffset = 0
 				m.sidebarScrollbarSeq++
-			case key.Matches(msg, m.keyMap.Chat.End):
+			case keys.Matches(msg, m.keyMap.Chat.End):
 				m.sidebarOffset = m.sidebarMaxOffsetVal
 				m.sidebarScrollbarSeq++
-			case key.Matches(msg, m.keyMap.Chat.FocusChat):
+			case keys.Matches(msg, m.keyMap.Chat.FocusChat):
 				m.focus = uiFocusMain
 				m.sidebarScrollbarVisible = false
 				m.chat.Focus()
-			case key.Matches(msg, m.keyMap.Tab):
+			case keys.Matches(msg, m.keyMap.Tab):
 				m.focus = uiFocusEditor
 				m.sidebarScrollbarVisible = false
 				cmds = append(cmds, m.textarea.Focus())
@@ -3771,6 +3772,14 @@ func (m *UI) View() tea.View {
 	v.MouseMode = mouseMode(m.mouseEnabled, m.activeInline != nil)
 	v.ReportFocus = m.caps.ReportFocusEvents
 	v.WindowTitle = "crush " + home.Short(m.com.Workspace.WorkingDir())
+
+	// Ask the terminal for the key each press was made on, alongside the
+	// character the active layout produced. Shortcuts are matched by that
+	// physical key, so they keep working on non-Latin layouts, while typed
+	// text still arrives as the characters the layout produces.
+	v.KeyboardEnhancements.ReportAlternateKeys = true
+	v.KeyboardEnhancements.ReportAllKeysAsEscapeCodes = true
+	v.KeyboardEnhancements.ReportAssociatedText = true
 
 	key, cacheable := m.currentFrameKey()
 	if cacheable {

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/question"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -80,17 +81,17 @@ func (d *MultiChoice) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(msg, d.keyClose):
+	case keys.Matches(msg, d.keyClose):
 		d.answer(question.Answer{QuestionID: d.Request.ID})
 		return true, nil
-	case key.Matches(msg, d.keyDone):
+	case keys.Matches(msg, d.keyDone):
 		if d.isFillIn() && !d.fillIn.Focused() {
 			d.fillIn.Focus()
 			return false, d.fillIn.Focus()
 		}
 		d.answer(d.respond())
 		return true, nil
-	case key.Matches(msg, d.keyToggle):
+	case keys.Matches(msg, d.keyToggle):
 		// In hover mode, toggle the item under the mouse.
 		d.adoptHover()
 		if d.isFillIn() {
@@ -106,7 +107,7 @@ func (d *MultiChoice) HandleKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if !d.selected[d.cursorIdx] {
 			delete(d.selected, d.cursorIdx)
 		}
-	case key.Matches(msg, d.keyNote) && !d.fillIn.Focused():
+	case keys.Matches(msg, d.keyNote) && !d.fillIn.Focused():
 		d.adoptHover()
 		return false, d.openNote(d.noteKey())
 	}

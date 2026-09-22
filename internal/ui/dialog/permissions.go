@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/ui/common"
+	"github.com/charmbracelet/crush/internal/ui/keys"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -235,43 +236,43 @@ func (p *Permissions) HandleMsg(msg tea.Msg) Action {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch {
-		case key.Matches(msg, p.keyMap.Close):
+		case keys.Matches(msg, p.keyMap.Close):
 			// Escape denies the permission request.
 			return p.respond(PermissionDeny)
-		case key.Matches(msg, p.keyMap.Right), key.Matches(msg, p.keyMap.Tab):
+		case keys.Matches(msg, p.keyMap.Right), keys.Matches(msg, p.keyMap.Tab):
 			p.selectedOption = (p.selectedOption + 1) % 3
-		case key.Matches(msg, p.keyMap.Left):
+		case keys.Matches(msg, p.keyMap.Left):
 			// Add 2 instead of subtracting 1 to avoid negative modulo.
 			p.selectedOption = (p.selectedOption + 2) % 3
-		case key.Matches(msg, p.keyMap.Select):
+		case keys.Matches(msg, p.keyMap.Select):
 			return p.selectCurrentOption()
-		case key.Matches(msg, p.keyMap.Allow):
+		case keys.Matches(msg, p.keyMap.Allow):
 			return p.respond(PermissionAllow)
-		case key.Matches(msg, p.keyMap.AllowSession):
+		case keys.Matches(msg, p.keyMap.AllowSession):
 			return p.respond(PermissionAllowForSession)
-		case key.Matches(msg, p.keyMap.Deny):
+		case keys.Matches(msg, p.keyMap.Deny):
 			return p.respond(PermissionDeny)
-		case key.Matches(msg, p.keyMap.ToggleDiffMode):
+		case keys.Matches(msg, p.keyMap.ToggleDiffMode):
 			if p.hasDiffView() {
 				newMode := !p.isSplitMode()
 				p.diffSplitMode = &newMode
 				p.viewportDirty = true
 			}
-		case key.Matches(msg, p.keyMap.ToggleFullscreen):
+		case keys.Matches(msg, p.keyMap.ToggleFullscreen):
 			if p.hasDiffView() {
 				p.fullscreen = !p.fullscreen
 			}
-		case key.Matches(msg, p.keyMap.ScrollDown):
+		case keys.Matches(msg, p.keyMap.ScrollDown):
 			p.viewport, _ = p.viewport.Update(msg)
-		case key.Matches(msg, p.keyMap.ScrollUp):
+		case keys.Matches(msg, p.keyMap.ScrollUp):
 			p.viewport, _ = p.viewport.Update(msg)
-		case key.Matches(msg, p.keyMap.ScrollLeft):
+		case keys.Matches(msg, p.keyMap.ScrollLeft):
 			if p.hasDiffView() {
 				p.scrollLeft()
 			} else {
 				p.viewport, _ = p.viewport.Update(msg)
 			}
-		case key.Matches(msg, p.keyMap.ScrollRight):
+		case keys.Matches(msg, p.keyMap.ScrollRight):
 			if p.hasDiffView() {
 				p.scrollRight()
 			} else {
