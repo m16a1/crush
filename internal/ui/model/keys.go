@@ -76,15 +76,16 @@ type KeyMap struct {
 	}
 
 	// Global key maps
-	Quit       key.Binding
-	Help       key.Binding
-	Commands   key.Binding
-	Models     key.Binding
-	Suspend    key.Binding
-	Sessions   key.Binding
-	Tab        key.Binding
-	ToggleYolo key.Binding
-	ShiftTab   key.Binding
+	Quit         key.Binding
+	Help         key.Binding
+	Commands     key.Binding
+	Models       key.Binding
+	Suspend      key.Binding
+	Sessions     key.Binding
+	Tab          key.Binding
+	ToggleYolo   key.Binding
+	ShiftTab     key.Binding
+	ResendPrompt key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -125,6 +126,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("shift+tab"),
 			key.WithHelp("shift+tab", "mode"),
 		),
+		ResendPrompt: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "resend prompt"),
+		),
 	}
 
 	km.Editor.SendMessage = key.NewBinding(
@@ -163,8 +168,8 @@ func DefaultKeyMap() KeyMap {
 		key.WithHelp("/", "commands"),
 	)
 	km.Editor.AttachmentDeleteMode = key.NewBinding(
-		key.WithKeys("ctrl+r"),
-		key.WithHelp("ctrl+r+{i}", "delete attachment at index i"),
+		key.WithKeys("ctrl+x"),
+		key.WithHelp("ctrl+x+{i}", "delete attachment at index i"),
 	)
 	km.Editor.Escape = key.NewBinding(
 		key.WithKeys("esc", "alt+esc"),
@@ -172,7 +177,7 @@ func DefaultKeyMap() KeyMap {
 	)
 	km.Editor.DeleteAllAttachments = key.NewBinding(
 		key.WithKeys("r"),
-		key.WithHelp("ctrl+r+r", "delete all attachments"),
+		key.WithHelp("ctrl+x+r", "delete all attachments"),
 	)
 	km.Editor.HistoryPrev = key.NewBinding(
 		key.WithKeys("up"),
