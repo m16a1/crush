@@ -57,7 +57,21 @@ func (m *UI) modelInfo(width int) string {
 	if model != nil {
 		modelName = model.CatwalkCfg.Name
 	}
-	return common.ModelInfo(m.com.Styles, modelName, providerName, reasoningInfo, modelContext, width, m.hyperCredits)
+	info := common.ModelInfo(m.com.Styles, modelName, providerName, reasoningInfo, modelContext, width, m.hyperCredits)
+
+	// Generation timings (time to first token and throughput) sit under the
+	// token/cost line while a turn streams and stay for the last timed turn.
+	// The sidebar is narrow, so the status wraps onto a second line rather
+	// than being cut off.
+	if status := common.MetricsStatusLines(width - 2); len(status) > 0 {
+		lines := make([]string, 0, len(status)+1)
+		lines = append(lines, info)
+		for _, line := range status {
+			lines = append(lines, lipgloss.NewStyle().PaddingLeft(2).Render(m.com.Styles.ModelInfo.TokenCount.Render(line)))
+		}
+		info = lipgloss.JoinVertical(lipgloss.Left, lines...)
+	}
+	return info
 }
 
 // updateSidebarScrollState renders the sidebar content and computes scroll

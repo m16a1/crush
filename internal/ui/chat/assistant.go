@@ -252,7 +252,7 @@ func NewAssistantMessageItem(sty *styles.Styles, message *message.Message) Messa
 		LabelColor:  sty.WorkingLabelColor,
 		CycleColors: true,
 		Suffix: func() string {
-			return common.Elapsed()
+			return common.MetricsStatus()
 		},
 		SuffixColor: sty.WorkingTimerColor,
 	})
@@ -290,7 +290,7 @@ func (a *AssistantMessageItem) RawRender(width int) string {
 
 	var spinner string
 	if a.isSpinning() {
-		spinner = a.renderSpinning()
+		spinner = a.renderSpinning(cappedWidth)
 	}
 
 	content, height := a.renderMessageContent(cappedWidth)
@@ -766,13 +766,15 @@ func (a *AssistantMessageItem) renderMarkdown(content string, width int) string 
 	return a.streamingContent.Render(content, width, renderer)
 }
 
-func (a *AssistantMessageItem) renderSpinning() string {
+// renderSpinning renders the working indicator, trimmed to the available width
+// so the generation status in its suffix never overflows the chat column.
+func (a *AssistantMessageItem) renderSpinning(width int) string {
 	if a.message.IsThinking() {
 		a.anim.SetLabel("Thinking")
 	} else if a.message.IsSummaryMessage {
 		a.anim.SetLabel("Summarizing")
 	}
-	return a.anim.Render()
+	return ansi.Truncate(a.anim.Render(), width, "…")
 }
 
 // renderError renders an error or provider-refusal banner.

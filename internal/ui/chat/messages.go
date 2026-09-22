@@ -314,6 +314,14 @@ func (a *AssistantInfoItem) Finished() bool {
 	return true
 }
 
+// InvalidateMetrics drops the cached render so generation metrics (time to
+// first token, tokens per second) that arrive after the footer was drawn show
+// up on the next draw.
+func (a *AssistantInfoItem) InvalidateMetrics() {
+	a.clearCache()
+	a.Bump()
+}
+
 // ID implements MessageItem.
 func (a *AssistantInfoItem) ID() string {
 	return a.id
@@ -384,12 +392,27 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 	}
 	provider := a.sty.Messages.AssistantInfoProvider.Render(fmt.Sprintf("via %s", providerName))
 	duration := time.Unix(finishData.Time, 0).Sub(a.lastUserMessageTime)
-	infoMsg := a.sty.Messages.AssistantInfoDuration.Render(fmt.Sprintf("in %s", duration))
+	timing := fmt.Sprintf("in %s", duration)
+	// Generation metrics are only available for turns this process timed, so
+	// replayed history shows the duration alone. They are trimmed to whatever
+	// room the model and provider names leave, dropping the turn average before
+	// the throughput instead of cutting a number in half.
+	budget := width - lipgloss.Width(assistantPrefix(icon, modelFormatted, provider)) - lipgloss.Width(timing)
+	if metrics := common.MetricsForWidth(a.message.ID, budget); metrics != "" {
+		timing += " · " + metrics
+	}
+	infoMsg := a.sty.Messages.AssistantInfoDuration.Render(timing)
 	assistant := fmt.Sprintf("%s %s %s %s", icon, modelFormatted, provider, infoMsg)
 	if savings != "" {
 		assistant = fmt.Sprintf("%s %s", assistant, savings)
 	}
 	return common.Section(a.sty, assistant, width)
+}
+
+// assistantPrefix returns the space-separated prefix of an assistant footer,
+// used to work out how much room is left for the timing text.
+func assistantPrefix(parts ...string) string {
+	return strings.Join(parts, " ") + " "
 }
 
 // cappedMessageWidth returns the maximum width for message content for readability.

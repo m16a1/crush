@@ -995,6 +995,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.renderPills()
 			}
 			m.autoExpandPillsIfReasonable()
+			// A step's usage lands just after the step finished streaming on
+			// the agent side; use it to close out the throughput measurement.
+			m.finalizeStepMetrics(msg.Payload.CompletionTokens)
 		}
 	case pubsub.Event[message.Message]:
 		// Check if this is a child session message for an agent tool.
@@ -1742,6 +1745,87 @@ func (m *UI) setMessagePlanFlags(items []chat.MessageItem) {
 	}
 }
 
+// startStreamStep begins timing a new generation step so the working indicator
+// can report its time to first token and throughput. Every model response is a
+// separate step and gets its own assistant message.
+func (m *UI) startStreamStep(msg *message.Message) {
+	if msg.Role != message.Assistant || msg.IsSummaryMessage {
+		return
+	}
+	common.StartStep(msg.ID)
+}
+
+// trackStreamStep feeds the live generation metrics from streamed updates: the
+// first model output of a step marks its time to first token, and the finish
+// part closes the step so its throughput can be derived from the reported usage.
+func (m *UI) trackStreamStep(msg *message.Message) {
+	if msg.Role != message.Assistant || msg.IsSummaryMessage {
+		return
+	}
+	if !common.TrackedStep(msg.ID) {
+		// A step whose creation we missed (e.g. a client reconnect) can still
+		// be timed from its first streamed update.
+		if msg.FinishPart() != nil {
+			return
+		}
+		common.StartStep(msg.ID)
+	}
+	if messageHasModelOutput(msg) {
+		common.MarkFirstToken()
+	}
+	if msg.FinishPart() != nil {
+		common.MarkStepFinished()
+		if m.session != nil {
+			m.finalizeStepMetrics(m.session.CompletionTokens)
+		}
+	}
+}
+
+// finalizeStepMetrics derives the current step's throughput from its output
+// token count and refreshes the assistant footer so the new numbers appear.
+func (m *UI) finalizeStepMetrics(tokens int64) {
+	if tokens <= 0 {
+		return
+	}
+	common.FinishStep(tokens)
+	m.invalidateAssistantInfo(common.StepMessageID())
+}
+
+// invalidateAssistantInfo drops the cached render of the assistant info footer
+// of the given message so refreshed generation metrics are picked up.
+func (m *UI) invalidateAssistantInfo(messageID string) {
+	if messageID == "" {
+		return
+	}
+	item, ok := m.chat.MessageItem(chat.AssistantInfoID(messageID)).(*chat.AssistantInfoItem)
+	if !ok {
+		return
+	}
+	item.InvalidateMetrics()
+}
+
+// messageHasModelOutput reports whether an assistant message has streamed any
+// model output yet, which is what marks the first token of a step.
+func messageHasModelOutput(msg *message.Message) bool {
+	for _, part := range msg.Parts {
+		switch p := part.(type) {
+		case message.TextContent:
+			if strings.TrimSpace(p.Text) != "" {
+				return true
+			}
+		case message.ReasoningContent:
+			if strings.TrimSpace(p.Thinking) != "" {
+				return true
+			}
+		case message.ToolCall:
+			if p.Finished || p.Input != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // appendSessionMessage appends a new message to the current session in the chat
 // if the message is a tool result it will update the corresponding tool call message
 func (m *UI) appendSessionMessage(msg message.Message) tea.Cmd {
@@ -1772,6 +1856,7 @@ func (m *UI) appendSessionMessage(msg message.Message) tea.Cmd {
 		m.chat.AppendMessages(items...)
 		m.chat.ScrollToBottom()
 	case message.Assistant:
+		m.startStreamStep(&msg)
 		items := chat.ExtractMessageItems(m.com.Styles, &msg, nil, m.com.Workspace.WorkingDir())
 		m.setMessagePlanFlags(items)
 		m.chat.AppendMessages(items...)
@@ -1870,6 +1955,7 @@ func (m *UI) updateSessionMessage(msg message.Message) tea.Cmd {
 	// A message update means work is active; the animation clock may have
 	// been frozen by a non-busy session reload (ghost-spinner guard).
 	m.chat.SetAnimationsAllowed(true)
+	m.trackStreamStep(&msg)
 	var cmds []tea.Cmd
 	existingItem := m.chat.MessageItem(msg.ID)
 
