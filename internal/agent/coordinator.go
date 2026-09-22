@@ -31,6 +31,7 @@ import (
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/history"
 	"github.com/charmbracelet/crush/internal/hooks"
+	"github.com/charmbracelet/crush/internal/httperror"
 	"github.com/charmbracelet/crush/internal/log"
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/message"
@@ -1040,6 +1041,17 @@ func (c *coordinator) hyperAPIKey() string {
 	return config.ResolveHyperAPIKey(c.cfg.Config())
 }
 
+// providerHTTPClient returns the HTTP client used for provider requests. The
+// debug build logs requests and responses, and every client normalizes provider
+// error bodies so a provider's own error message survives SDK decoding.
+func (c *coordinator) providerHTTPClient() *http.Client {
+	var client *http.Client
+	if c.cfg.Config().Options.Debug {
+		client = log.NewHTTPClient()
+	}
+	return httperror.WithNormalizedErrors(client)
+}
+
 func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
 	var opts []anthropic.Option
 
@@ -1065,10 +1077,7 @@ func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map
 		opts = append(opts, anthropic.WithBaseURL(baseURL))
 	}
 
-	if c.cfg.Config().Options.Debug {
-		httpClient := log.NewHTTPClient()
-		opts = append(opts, anthropic.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, anthropic.WithHTTPClient(c.providerHTTPClient()))
 	return anthropic.New(opts...)
 }
 
@@ -1077,25 +1086,19 @@ func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[st
 		openai.WithAPIKey(apiKey),
 		openai.WithUseResponsesAPI(),
 	}
-	var httpClient *http.Client
-	if c.cfg.Config().Options.Debug {
-		httpClient = log.NewHTTPClient()
-	}
+	// The Codex transport is layered over the debug logger and the error body
+	// normalization, so the backend's own errors are rewritten too.
+	httpClient := c.providerHTTPClient()
 	if token != nil {
 		// ChatGPT OAuth: requests go through the Codex backend, which
 		// expects account headers and rejects some request fields, so
 		// they pass through the Codex transport.
-		if httpClient == nil {
-			httpClient = &http.Client{}
-		}
 		httpClient.Transport = &openaioauth.Transport{
 			Base:  httpClient.Transport,
 			Token: token,
 		}
 	}
-	if httpClient != nil {
-		opts = append(opts, openai.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, openai.WithHTTPClient(httpClient))
 	if len(headers) > 0 {
 		opts = append(opts, openai.WithHeaders(headers))
 	}
@@ -1109,10 +1112,7 @@ func (c *coordinator) buildOpenrouterProvider(_, apiKey string, headers map[stri
 	opts := []openrouter.Option{
 		openrouter.WithAPIKey(apiKey),
 	}
-	if c.cfg.Config().Options.Debug {
-		httpClient := log.NewHTTPClient()
-		opts = append(opts, openrouter.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, openrouter.WithHTTPClient(c.providerHTTPClient()))
 	if len(headers) > 0 {
 		opts = append(opts, openrouter.WithHeaders(headers))
 	}
@@ -1123,10 +1123,7 @@ func (c *coordinator) buildVercelProvider(_, apiKey string, headers map[string]s
 	opts := []vercel.Option{
 		vercel.WithAPIKey(apiKey),
 	}
-	if c.cfg.Config().Options.Debug {
-		httpClient := log.NewHTTPClient()
-		opts = append(opts, vercel.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, vercel.WithHTTPClient(c.providerHTTPClient()))
 	if len(headers) > 0 {
 		opts = append(opts, vercel.WithHeaders(headers))
 	}
@@ -1169,12 +1166,14 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 			),
 		)
 	}
-	if httpClient == nil && c.cfg.Config().Options.Debug {
-		httpClient = log.NewHTTPClient()
+	if httpClient == nil {
+		httpClient = c.providerHTTPClient()
+	} else {
+		// Providers that bring their own client (Copilot) still need error
+		// bodies normalized before the SDK decodes them.
+		httpClient = httperror.WithNormalizedErrors(httpClient)
 	}
-	if httpClient != nil {
-		opts = append(opts, openaicompat.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, openaicompat.WithHTTPClient(httpClient))
 
 	if len(headers) > 0 {
 		opts = append(opts, openaicompat.WithHeaders(headers))
@@ -1193,10 +1192,7 @@ func (c *coordinator) buildAzureProvider(baseURL, apiKey string, headers map[str
 		azure.WithAPIKey(apiKey),
 		azure.WithUseResponsesAPI(),
 	}
-	if c.cfg.Config().Options.Debug {
-		httpClient := log.NewHTTPClient()
-		opts = append(opts, azure.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, azure.WithHTTPClient(c.providerHTTPClient()))
 	if options == nil {
 		options = make(map[string]string)
 	}
@@ -1212,10 +1208,7 @@ func (c *coordinator) buildAzureProvider(baseURL, apiKey string, headers map[str
 
 func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
 	var opts []bedrock.Option
-	if c.cfg.Config().Options.Debug {
-		httpClient := log.NewHTTPClient()
-		opts = append(opts, bedrock.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, bedrock.WithHTTPClient(c.providerHTTPClient()))
 	if len(headers) > 0 {
 		opts = append(opts, bedrock.WithHeaders(headers))
 	}
@@ -1244,10 +1237,7 @@ func (c *coordinator) buildGoogleProvider(baseURL, apiKey string, headers map[st
 		google.WithBaseURL(baseURL),
 		google.WithGeminiAPIKey(apiKey),
 	}
-	if c.cfg.Config().Options.Debug {
-		httpClient := log.NewHTTPClient()
-		opts = append(opts, google.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, google.WithHTTPClient(c.providerHTTPClient()))
 	if len(headers) > 0 {
 		opts = append(opts, google.WithHeaders(headers))
 	}
@@ -1256,10 +1246,7 @@ func (c *coordinator) buildGoogleProvider(baseURL, apiKey string, headers map[st
 
 func (c *coordinator) buildGoogleVertexProvider(headers map[string]string, options map[string]string) (fantasy.Provider, error) {
 	opts := []google.Option{}
-	if c.cfg.Config().Options.Debug {
-		httpClient := log.NewHTTPClient()
-		opts = append(opts, google.WithHTTPClient(httpClient))
-	}
+	opts = append(opts, google.WithHTTPClient(c.providerHTTPClient()))
 	if len(headers) > 0 {
 		opts = append(opts, google.WithHeaders(headers))
 	}
