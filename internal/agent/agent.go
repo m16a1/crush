@@ -56,6 +56,16 @@ const (
 	largeContextWindowThreshold = 200_000
 	largeContextWindowBuffer    = 20_000
 	smallContextWindowRatio     = 0.2
+
+	// maxTitlePromptChars bounds how much of a prompt is handed to the
+	// title model. A long first message (a pasted file or log, say) is
+	// otherwise sent whole, overflows the title model's context window
+	// and fails the request, leaving the session unnamed.
+	maxTitlePromptChars = 2000
+
+	// maxTitleChars is the longest title kept, matching the length the
+	// title model is asked to stay under.
+	maxTitleChars = 50
 )
 
 var userAgent = fmt.Sprintf("Charm-Crush/%s (https://charm.land/crush)", version.Version)
@@ -1796,12 +1806,32 @@ func titlePromptFromMessage(msg message.Message) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
+// titleFromPrompt names a session after its prompt, used when the title model
+// could not produce one. The prompt is flattened to a single line and kept to
+// the same length the title model is asked to stay under.
+func titleFromPrompt(prompt string) string {
+	fallback := strings.Join(strings.Fields(prompt), " ")
+	if ansi.StringWidth(fallback) > maxTitleChars {
+		fallback = ansi.Truncate(fallback, maxTitleChars, "…")
+	}
+	return cmp.Or(fallback, DefaultSessionName)
+}
+
 // generateTitle builds a title from userPrompt and stores it. When
 // keepExisting is set the session keeps the title it has if generation fails;
-// otherwise the default name is saved so the session is never left nameless.
+// otherwise the session is named after the prompt so it is never left on the
+// placeholder name.
 func (a *sessionAgent) generateTitle(ctx context.Context, sessionID, userPrompt string, keepExisting bool) error {
 	if userPrompt == "" {
 		return errors.New("no prompt to generate a title from")
+	}
+
+	// Send only the opening of the prompt. A long first message is
+	// otherwise sent whole, which overflows the title model's context
+	// window and fails the request, and the opening is what names a
+	// session anyway.
+	if runes := []rune(userPrompt); len(runes) > maxTitlePromptChars {
+		userPrompt = string(runes[:maxTitlePromptChars])
 	}
 
 	// Ensure the session always gets a title even if every path below
@@ -1813,7 +1843,7 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID, userPrompt 
 		}
 		fallbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if err := a.sessions.Rename(fallbackCtx, sessionID, DefaultSessionName); err != nil {
+		if err := a.sessions.Rename(fallbackCtx, sessionID, titleFromPrompt(userPrompt)); err != nil {
 			slog.Error("Failed to save fallback session title", "error", err)
 		}
 	}()
@@ -1895,15 +1925,9 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID, userPrompt 
 
 	title = strings.TrimSpace(title)
 	if title == "" {
-		// LLM returned empty content. Use the prompt itself as a
-		// fallback title, truncated to 50 chars, before resorting to
-		// the generic default.
-		fallback := strings.ReplaceAll(userPrompt, "\n", " ")
-		fallback = strings.TrimSpace(fallback)
-		if len(fallback) > 50 {
-			fallback = ansi.Truncate(fallback, 50, "…")
-		}
-		title = cmp.Or(fallback, DefaultSessionName)
+		// LLM returned empty content. Name the session after the
+		// prompt rather than leaving the generic default in place.
+		title = titleFromPrompt(userPrompt)
 	}
 
 	// Calculate usage and cost.
