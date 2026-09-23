@@ -42,6 +42,10 @@ type stepMetrics struct {
 	tps float64
 	// hasTPS reports whether a decode speed measurement is available.
 	hasTPS bool
+	// window is the step's decode window, the time from its first token to
+	// its last. Kept so the session's aggregate throughput can drop this
+	// step's share when a more accurate count replaces it.
+	window time.Duration
 }
 
 // metricsTracker tracks the elapsed time of the current agent turn, the
@@ -78,11 +82,14 @@ type metricsTracker struct {
 	lastPromptTokens int64
 	lastOutputTokens int64
 
-	// rateSum and rateSteps hold the session's average decode speed, as the
-	// mean of every measured step's rate. ttftSum and ttftSteps hold its
-	// average time to first token the same way.
-	rateSum   float64
-	rateSteps int
+	// tokenSum and windowSum hold the session's aggregate decode speed:
+	// the output tokens every measured step produced over the total time
+	// they took to produce them. A short response contributes only the
+	// handful of tokens and milliseconds it had, so it cannot outweigh a
+	// long one the way a mean of per-step rates would. ttftSum and
+	// ttftSteps hold the average time to first token, one vote per step.
+	tokenSum  int64
+	windowSum time.Duration
 	ttftSum   time.Duration
 	ttftSteps int
 
@@ -144,8 +151,8 @@ func ResetMetrics() {
 // resetLocked clears everything that describes the session's generation
 // history. Callers must hold turnTimer.mu.
 func (t *metricsTracker) resetLocked() {
-	t.rateSum = 0
-	t.rateSteps = 0
+	t.tokenSum = 0
+	t.windowSum = 0
 	t.ttftSum = 0
 	t.ttftSteps = 0
 	t.lastTTFT = 0
@@ -229,10 +236,10 @@ func MarkStepFinished() {
 }
 
 // FinishStep records the token usage the provider reported for the current
-// step, derives its decode speed, and folds both into the session's running
-// averages. Repeating the call is safe: the window was frozen when the step
-// finished, so a more accurate count only refines the rate and replaces the
-// step's earlier contribution.
+// step, derives its decode speed, and folds both into the session's aggregate
+// throughput. Repeating the call is safe: the window was frozen when the step
+// finished, and a step's earlier share is dropped before its new one is added,
+// so a more accurate count only refines the rate.
 func FinishStep(promptTokens, completionTokens int64) {
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
@@ -242,6 +249,7 @@ func FinishStep(promptTokens, completionTokens int64) {
 	}
 
 	metrics := turnTimer.steps[id]
+	previous := metrics
 	if promptTokens > 0 {
 		metrics.promptTokens = promptTokens
 		turnTimer.lastPromptTokens = promptTokens
@@ -254,18 +262,18 @@ func FinishStep(promptTokens, completionTokens int64) {
 	if completionTokens > 0 && !turnTimer.firstTokenTime.IsZero() && !turnTimer.stepFinishedAt.IsZero() {
 		elapsed := turnTimer.stepFinishedAt.Sub(turnTimer.firstTokenTime)
 		if elapsed >= minThroughputWindow {
-			rate := float64(completionTokens) / elapsed.Seconds()
-			if metrics.hasTPS {
-				// A refined count for a step that already contributed
-				// must replace its rate, not add a second one.
-				turnTimer.rateSum += rate - metrics.tps
-			} else {
-				turnTimer.rateSum += rate
-				turnTimer.rateSteps++
+			// Drop the step's earlier contribution, if it had one, so
+			// the aggregate covers the step once at its latest count.
+			if previous.hasTPS {
+				turnTimer.tokenSum -= previous.tokens
+				turnTimer.windowSum -= previous.window
 			}
-			metrics.tps = rate
+			turnTimer.tokenSum += completionTokens
+			turnTimer.windowSum += elapsed
+			metrics.tps = float64(completionTokens) / elapsed.Seconds()
 			metrics.hasTPS = true
-			turnTimer.lastTPS = rate
+			metrics.window = elapsed
+			turnTimer.lastTPS = metrics.tps
 		}
 	}
 
@@ -427,12 +435,14 @@ func (t *metricsTracker) averageTTFTLocked() string {
 }
 
 // averageTPSLocked returns the session's average decode speed, which is the
-// mean of every measured step's rate. Callers must hold turnTimer.mu.
+// output tokens every measured step produced over the total time they took to
+// produce them. Weighting by generation time this way keeps a short response
+// from outweighing a long one. Callers must hold turnTimer.mu.
 func (t *metricsTracker) averageTPSLocked() (float64, bool) {
-	if t.rateSteps == 0 {
+	if t.windowSum <= 0 {
 		return 0, false
 	}
-	return t.rateSum / float64(t.rateSteps), true
+	return float64(t.tokenSum) / t.windowSum.Seconds(), true
 }
 
 // visibleWidth returns the printed width of a status line's parts, including

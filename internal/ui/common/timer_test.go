@@ -173,21 +173,42 @@ func TestAverageThroughputIsReportedFromTheFirstStep(t *testing.T) {
 	require.InDelta(t, tpsOf(t, MetricsForWidth("m1", 0, 0, 200)), averageTPSOf(t), 1)
 }
 
-func TestAverageThroughputIsTheMeanOfStepRates(t *testing.T) {
+func TestAverageThroughputIsWeightedByGenerationTime(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
 	StartTurn()
-	measureStep(t, "m1", 4, 20*time.Millisecond)
-	measureStep(t, "m2", 4, 2*time.Millisecond)
+	measureStep(t, "m1", 4, 2*time.Millisecond)
+	measureStep(t, "m2", 400, 40*time.Millisecond)
 
-	slow := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
-	fast := tpsOf(t, MetricsForWidth("m2", 0, 0, 200))
+	short := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
+	long := tpsOf(t, MetricsForWidth("m2", 0, 0, 200))
 	average := averageTPSOf(t)
 
-	// Every step carries the same weight, however long it took. Weighting by
-	// generation time instead would drag the average towards the slow step.
-	require.InDelta(t, (slow+fast)/2, average, 1)
+	// The average is the session's total output over its total generation
+	// time, so the long, token-heavy step dominates it instead of every step
+	// casting an equal vote. A mean of the rates would sit halfway between
+	// the two, giving the short step far more weight than it earned.
+	require.Greater(t, average, (short+long)/2, "the long step carries the weight, not the short one")
+	require.Greater(t, average, long*0.8, "the average belongs near the long step")
+}
+
+func TestAverageThroughputDoesNotLetAShortStepInflateIt(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	// A short response reports an absurd rate next to a longer, slower one.
+	measureStep(t, "m1", 10, 2*time.Millisecond)
+	measureStep(t, "m2", 200, 200*time.Millisecond)
+
+	short := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
+	long := tpsOf(t, MetricsForWidth("m2", 0, 0, 200))
+	average := averageTPSOf(t)
+
+	require.Greater(t, short, long*2, "the short step reads far faster")
+	require.Less(t, average, 2*long, "its few tokens do not pull the session's speed up to its own")
+	require.Less(t, average, (short+long)/2, "the mean of rates would be inflated")
 }
 
 func TestAverageTimeToFirstTokenCoversEveryMeasuredStep(t *testing.T) {
@@ -214,18 +235,22 @@ func TestAverageThroughputIsRefinedNotDuplicated(t *testing.T) {
 	first := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
 
 	// A refined count for a step that already contributed must replace its
-	// share of the average rather than add to it, so the mean still covers
-	// exactly two steps: the untouched one and the refined one.
+	// share of the aggregate rather than add to it, so the totals still
+	// cover exactly two steps: the untouched one and the refined one.
 	FinishStep(0, 200)
 	refined := tpsOf(t, MetricsForWidth("m2", 0, 0, 200))
 	after := averageTPSOf(t)
 
 	require.Greater(t, after, before)
-	require.InDelta(t, (first+refined)/2, after, 2)
 
-	// Counting the refined step twice would leave the mean diluted by its
-	// earlier, slower rate instead.
-	require.Greater(t, after, (first+refined/2+refined)/3+2)
+	// The aggregate is the reported tokens over the windows they were
+	// produced in, both of which are recoverable from the per-step rates.
+	expected := (100.0 + 200.0) / (100.0/first + 200.0/refined)
+	require.InDelta(t, expected, after, expected*0.01)
+
+	// Counting the refined step twice would leave the aggregate diluted by
+	// its earlier, slower count instead.
+	require.Greater(t, after, (first+first+refined)/3)
 }
 
 func TestAverageThroughputCarriesAcrossTurns(t *testing.T) {
