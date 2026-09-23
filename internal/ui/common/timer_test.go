@@ -13,8 +13,9 @@ import (
 // tpsPattern matches the decode speed of a formatted metrics string.
 var tpsPattern = regexp.MustCompile(`([0-9]+(?:\.[0-9]+)?) tps`)
 
-// sidebarPattern matches the average status line the sidebar renders.
-var sidebarPattern = regexp.MustCompile(`^avg: ttft (\S+) · ([0-9.]+) tps$`)
+// sidebarPattern matches the average status line the sidebar renders: the
+// session's prefill speed and its decode speed, both in tokens per second.
+var sidebarPattern = regexp.MustCompile(`^avg tps: ↑([0-9.]+) · ↓([0-9.]+)$`)
 
 // resetTracker clears the process-wide tracker between tests so cases do not
 // leak timings into each other.
@@ -51,15 +52,44 @@ func averageTPSOf(t *testing.T) float64 {
 	return value
 }
 
-// measureStep times a step over the given window, which must be long enough to
-// count as real generation.
+// averagePrefillOf extracts the average prefill speed from the sidebar status.
+func averagePrefillOf(t *testing.T) float64 {
+	t.Helper()
+	match := sidebarPattern.FindStringSubmatch(sidebarStatus(t))
+	require.Len(t, match, 3, "sidebar status does not match: %q", sidebarStatus(t))
+	value, err := strconv.ParseFloat(match[1], 64)
+	require.NoError(t, err)
+	return value
+}
+
+// measureStep times a step the given window long, reporting a prompt size with
+// it so the step joins both of the session's averages.
 func measureStep(t *testing.T, messageID string, tokens int64, window time.Duration) {
+	t.Helper()
+	measureStepWithPrompt(t, messageID, 1_000, tokens, window)
+}
+
+// measureStepWithPrompt times a step the given window long, having read the
+// given prompt tokens before its first token.
+func measureStepWithPrompt(t *testing.T, messageID string, promptTokens, tokens int64, window time.Duration) {
 	t.Helper()
 	StartStep(messageID)
 	MarkFirstToken()
 	time.Sleep(window)
 	MarkStepFinished()
-	FinishStep(0, tokens)
+	FinishStep(promptTokens, tokens)
+}
+
+// measurePrefillStep times a step whose first token waits out the prefill
+// before arriving, which is what the session's prefill speed is measured from.
+func measurePrefillStep(t *testing.T, messageID string, promptTokens int64, prefill, decode time.Duration) {
+	t.Helper()
+	StartStep(messageID)
+	time.Sleep(prefill)
+	MarkFirstToken()
+	time.Sleep(decode)
+	MarkStepFinished()
+	FinishStep(promptTokens, 10)
 }
 
 func TestMetricsStatusReportsElapsedBeforeAnythingIsMeasured(t *testing.T) {
@@ -211,17 +241,54 @@ func TestAverageThroughputDoesNotLetAShortStepInflateIt(t *testing.T) {
 	require.Less(t, average, (short+long)/2, "the mean of rates would be inflated")
 }
 
-func TestAverageTimeToFirstTokenCoversEveryMeasuredStep(t *testing.T) {
+// TestAveragePrefillSpeedIsStableAcrossPromptSizes: the session's prefill speed
+// is the prompt tokens every measured step read over the time it took them to
+// reach their first token. Because both grow together, the rate does not move
+// with the prompt size, which is what a mean time to first token could not do.
+func TestAveragePrefillSpeedIsStableAcrossPromptSizes(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
 	StartTurn()
-	measureStep(t, "m1", 100, 2*time.Millisecond)
-	first := sidebarStatus(t)
+	measurePrefillStep(t, "m1", 1_000, 20*time.Millisecond, 10*time.Millisecond)
+	measurePrefillStep(t, "m2", 10_000, 200*time.Millisecond, 10*time.Millisecond)
 
-	measureStep(t, "m2", 100, 2*time.Millisecond)
-	require.NotEqual(t, first, sidebarStatus(t), "the second step joins the average")
-	require.Regexp(t, `^avg: ttft [0-9.]+(ms|s) · `, sidebarStatus(t))
+	// Both steps read their prompt at about fifty thousand tokens per second,
+	// so the session reports that rate rather than a value the bigger prompt
+	// dragged up or down.
+	require.InDelta(t, 50_000, averagePrefillOf(t), 0.25*50_000)
+}
+
+// TestAveragePrefillSpeedIsWeightedByPromptTokens: a step that read a large
+// prompt carries more of the session's prefill speed than a tiny one, the way
+// the decode average is weighted by output tokens. A mean of the per-step rates
+// would let the tiny step pull the session's speed to its own.
+func TestAveragePrefillSpeedIsWeightedByPromptTokens(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	measurePrefillStep(t, "m1", 100, 100*time.Millisecond, 10*time.Millisecond)
+	measurePrefillStep(t, "m2", 10_000, 10*time.Millisecond, 10*time.Millisecond)
+
+	require.Less(t, averagePrefillOf(t), 200_000.0, "the token-heavy step carries the average, not the mean of the rates")
+}
+
+// TestAveragePrefillSpeedIsRefinedNotDuplicated: a later, more accurate prompt
+// count replaces the step's earlier share of the prefill speed rather than
+// adding to it, so the step is never counted twice.
+func TestAveragePrefillSpeedIsRefinedNotDuplicated(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	measurePrefillStep(t, "m1", 1_000, 20*time.Millisecond, 10*time.Millisecond)
+	before := averagePrefillOf(t)
+
+	// The step turns out to have read twice the prompt over the same prefill.
+	FinishStep(2_000, 10)
+
+	require.InDelta(t, 2*before, averagePrefillOf(t), before*0.05, "the refined count replaces the earlier one")
 }
 
 func TestAverageThroughputIsRefinedNotDuplicated(t *testing.T) {
@@ -322,7 +389,7 @@ func TestMetricsStatusLinesAlwaysReportBothAverages(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
-	require.Equal(t, []string{"avg: ttft - · - tps"}, MetricsStatusLines(30))
+	require.Equal(t, []string{"avg tps: ↑- · ↓-"}, MetricsStatusLines(30))
 }
 
 func TestMetricsStatusLinesKeepsOneLineWhenItFits(t *testing.T) {
@@ -335,7 +402,7 @@ func TestMetricsStatusLinesKeepsOneLineWhenItFits(t *testing.T) {
 
 	lines := MetricsStatusLines(200)
 	require.Len(t, lines, 1)
-	require.Regexp(t, `^avg: ttft [0-9.]+(ms|s) · [0-9.]+ tps$`, lines[0])
+	require.Regexp(t, `^avg tps: ↑[0-9.]+ · ↓[0-9.]+$`, lines[0])
 }
 
 func TestMetricsStatusLinesWrapInsteadOfDropping(t *testing.T) {
@@ -344,15 +411,32 @@ func TestMetricsStatusLinesWrapInsteadOfDropping(t *testing.T) {
 
 	StartTurn()
 	// Slow steps keep the average rate short, like real generation does.
-	measureStep(t, "m1", 4, 50*time.Millisecond)
-	measureStep(t, "m2", 4, 50*time.Millisecond)
+	measureStepWithPrompt(t, "m1", 0, 4, 50*time.Millisecond)
+	measureStepWithPrompt(t, "m2", 0, 4, 50*time.Millisecond)
 
 	lines := MetricsStatusLines(13)
 	require.Len(t, lines, 2, "the averages wrap instead of being dropped")
-	require.Contains(t, lines[0], "ttft ")
-	require.Contains(t, lines[1], "tps")
+	require.Contains(t, lines[0], "avg tps: ↑")
+	require.Contains(t, lines[1], "↓")
 	for _, line := range lines {
 		require.LessOrEqual(t, lipgloss.Width(line), 13)
+	}
+}
+
+// TestMetricsStatusLinesFitsANarrowerColumnThanTheLabel: even a column too
+// narrow for the label keeps every line inside it rather than spilling into the
+// chat beside the sidebar.
+func TestMetricsStatusLinesFitsANarrowerColumnThanTheLabel(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	measurePrefillStep(t, "m1", 1_000, 20*time.Millisecond, 10*time.Millisecond)
+
+	lines := MetricsStatusLines(5)
+	require.Len(t, lines, 2)
+	for _, line := range lines {
+		require.LessOrEqual(t, lipgloss.Width(line), 5)
 	}
 }
 
@@ -362,11 +446,11 @@ func TestResetMetricsStartsTheAveragesOver(t *testing.T) {
 
 	StartTurn()
 	measureStep(t, "m1", 100, 2*time.Millisecond)
-	require.NotContains(t, sidebarStatus(t), "avg: ttft -")
+	require.NotEqual(t, "avg tps: ↑- · ↓-", sidebarStatus(t), "the step is measured")
 
 	ResetMetrics()
 
-	require.Equal(t, "avg: ttft - · - tps", sidebarStatus(t), "the averages are gone")
+	require.Equal(t, "avg tps: ↑- · ↓-", sidebarStatus(t), "the averages are gone")
 	require.Empty(t, MetricsForWidth("m1", 0, 0, 200), "per-step timings are gone")
 	// The token counts live on the message, so a footer keeps showing them.
 	require.Equal(t, "↑12.3K · ↓456", MetricsForWidth("m1", 12_300, 456, 200))

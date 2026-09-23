@@ -59,7 +59,7 @@ func (m *UI) modelInfo(width int) string {
 	}
 	info := common.ModelInfo(m.com.Styles, modelName, providerName, reasoningInfo, modelContext, width, m.hyperCredits)
 
-	// The session's average time to first token and decode speed sit under the
+	// The session's average prefill and decode speeds sit under the
 	// token/cost line. They are always reported, as "-" until the session has
 	// measured something, and the sidebar is narrow, so the average status
 	// wraps onto a second line rather than being cut off.

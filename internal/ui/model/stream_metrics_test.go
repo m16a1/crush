@@ -90,13 +90,13 @@ func TestStreamMetricsInAssistantFooter(t *testing.T) {
 
 	// The sidebar carries the session's averages instead.
 	sidebar := ansi.Strip(m.modelInfo(120))
-	require.Contains(t, sidebar, "avg: ttft ")
+	require.Contains(t, sidebar, "avg tps: ↑")
 	require.Contains(t, sidebar, "tps")
 	require.NotContains(t, sidebar, "↓250", "the sidebar does not repeat per-response counts")
 
 	// The averages only move once a step has been measured.
 	average := ansi.Strip(strings.Join(common.MetricsStatusLines(200), " "))
-	require.NotContains(t, average, "avg: ttft -")
+	require.NotContains(t, average, "avg tps: ↑-")
 
 	// A second step of the same turn is measured on its own.
 	second := streamedAssistantMessage("a-metrics-2")
@@ -116,7 +116,7 @@ func TestStreamMetricsInAssistantFooter(t *testing.T) {
 	for _, line := range narrowLines {
 		require.LessOrEqual(t, lipgloss.Width(line), 30, "sidebar line %q overflows the column", line)
 	}
-	require.Contains(t, strings.Join(narrowLines, "\n"), "avg: ttft ")
+	require.Contains(t, strings.Join(narrowLines, "\n"), "avg tps: ↑")
 }
 
 // TestStreamMetricsIgnoredForReplayedMessages makes sure a message this process
@@ -153,7 +153,7 @@ func TestSidebarReportsNoAveragesWithoutMeasurements(t *testing.T) {
 	common.ResetMetrics()
 	t.Cleanup(common.ResetMetrics)
 
-	require.Equal(t, []string{"avg: ttft - · - tps"}, common.MetricsStatusLines(200))
+	require.Equal(t, []string{"avg tps: ↑- · ↓-"}, common.MetricsStatusLines(200))
 }
 
 // TestSwitchingSessionsResetsGenerationAverages: the averages describe the
@@ -176,10 +176,10 @@ func TestSwitchingSessionsResetsGenerationAverages(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	common.MarkStepFinished()
 	common.FinishStep(12_300, 200)
-	require.NotContains(t, common.MetricsStatusLines(200)[0], "avg: ttft -")
+	require.NotContains(t, common.MetricsStatusLines(200)[0], "avg tps: ↑-")
 
 	_, cmd := m.Update(loadSessionMsg{session: &session.Session{ID: "metrics-test-other"}})
 	runCmds(m, cmd)
 
-	require.Equal(t, "avg: ttft - · - tps", common.MetricsStatusLines(200)[0])
+	require.Equal(t, "avg tps: ↑- · ↓-", common.MetricsStatusLines(200)[0])
 }

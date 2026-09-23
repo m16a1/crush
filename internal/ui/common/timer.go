@@ -13,6 +13,9 @@ import (
 // statusSeparator joins the parts of a generation status line.
 const statusSeparator = " · "
 
+// statusPrefix labels the sidebar's average generation speeds.
+const statusPrefix = "avg tps: "
+
 // maxTrackedSteps bounds how many assistant messages keep their generation
 // metrics in memory so a long session cannot grow the tracker without limit.
 const maxTrackedSteps = 128
@@ -53,6 +56,13 @@ type stepMetrics struct {
 	// over (see decodeWindow). Kept so the session's aggregate throughput can
 	// drop this step's share when a more accurate count replaces it.
 	window time.Duration
+	// prefillTokens and prefillWindow are the step's share of the session's
+	// prefill speed: the prompt tokens it read and the time it took them to
+	// reach its first token. hasPrefill reports whether it made one; a step
+	// with no measured first token or no reported prompt tokens has none.
+	prefillTokens int64
+	prefillWindow time.Duration
+	hasPrefill    bool
 }
 
 // metricsTracker tracks the elapsed time of the current agent turn, the
@@ -93,12 +103,14 @@ type metricsTracker struct {
 	// the output tokens every measured step produced over the total time
 	// they took to produce them. A short response contributes only the
 	// handful of tokens and milliseconds it had, so it cannot outweigh a
-	// long one the way a mean of per-step rates would. ttftSum and
-	// ttftSteps hold the average time to first token, one vote per step.
-	tokenSum  int64
-	windowSum time.Duration
-	ttftSum   time.Duration
-	ttftSteps int
+	// long one the way a mean of per-step rates would. promptTokenSum and
+	// ttftSum hold the aggregate prefill speed the same way: the prompt
+	// tokens every measured step read over the total time it took them to
+	// reach their first token.
+	tokenSum       int64
+	windowSum      time.Duration
+	promptTokenSum int64
+	ttftSum        time.Duration
 
 	// steps keeps the timings of recent steps by assistant message ID so the
 	// footer of a finished turn can keep showing them.
@@ -160,8 +172,8 @@ func ResetMetrics() {
 func (t *metricsTracker) resetLocked() {
 	t.tokenSum = 0
 	t.windowSum = 0
+	t.promptTokenSum = 0
 	t.ttftSum = 0
-	t.ttftSteps = 0
 	t.lastTTFT = 0
 	t.lastTPS = 0
 	t.lastPromptTokens = 0
@@ -200,7 +212,9 @@ func TrackedStep(messageID string) bool {
 }
 
 // MarkFirstToken records the first streamed token of the current step and how
-// long it took to arrive. It is a no-op once the step already has a timing.
+// long it took to arrive. It is a no-op once the step already has a timing. The
+// step only joins the session's prefill speed once its prompt size is known, so
+// the time is kept on the step rather than added to the aggregate here.
 func MarkFirstToken() {
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
@@ -214,8 +228,6 @@ func MarkFirstToken() {
 		return
 	}
 	ttft := turnTimer.firstTokenTime.Sub(turnTimer.stepStartTime)
-	turnTimer.ttftSum += ttft
-	turnTimer.ttftSteps++
 	turnTimer.lastTTFT = ttft
 	setStepLocked(turnTimer.stepMessageID, stepMetrics{ttft: ttft})
 }
@@ -243,10 +255,10 @@ func MarkStepFinished() {
 }
 
 // FinishStep records the token usage the provider reported for the current
-// step, derives its decode speed, and folds both into the session's aggregate
-// throughput. Repeating the call is safe: the window was frozen when the step
-// finished, and a step's earlier share is dropped before its new one is added,
-// so a more accurate count only refines the rate.
+// step, derives its decode speed, and folds the step into the session's
+// aggregate prefill and decode speeds. Repeating the call is safe: the window
+// was frozen when the step finished, and a step's earlier share is dropped
+// before its new one is added, so a more accurate count only refines the rates.
 func FinishStep(promptTokens, completionTokens int64) {
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
@@ -264,6 +276,21 @@ func FinishStep(promptTokens, completionTokens int64) {
 	if completionTokens > 0 {
 		metrics.tokens = completionTokens
 		turnTimer.lastOutputTokens = completionTokens
+	}
+
+	// Prefill speed: the prompt tokens the step read over the time it took
+	// them to reach its first token. Both are needed to make a rate, and a
+	// step is only counted once.
+	if metrics.promptTokens > 0 && metrics.ttft > 0 {
+		if previous.hasPrefill {
+			turnTimer.promptTokenSum -= previous.prefillTokens
+			turnTimer.ttftSum -= previous.prefillWindow
+		}
+		turnTimer.promptTokenSum += metrics.promptTokens
+		turnTimer.ttftSum += metrics.ttft
+		metrics.prefillTokens = metrics.promptTokens
+		metrics.prefillWindow = metrics.ttft
+		metrics.hasPrefill = true
 	}
 
 	if completionTokens > 0 && !turnTimer.firstTokenTime.IsZero() && !turnTimer.stepFinishedAt.IsZero() {
@@ -297,19 +324,28 @@ func MetricsStatus() string {
 }
 
 // MetricsStatusLines returns the session's average generation status laid out
-// for a column of the given width. Both averages are always reported, as "-"
-// until the session has measured something, and the line wraps rather than
-// dropping a measurement when it does not fit.
+// for a column of the given width: the prompt tokens every measured step read
+// per second (prefill) and the output tokens it wrote per second (decode). Both
+// are always reported, as "-" until the session has measured something, and the
+// averages wrap rather than being dropped when the column cannot hold them.
 func MetricsStatusLines(width int) []string {
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
-	timing := "avg: ttft " + turnTimer.averageTTFTLocked()
-	throughput := formatTPS(turnTimer.averageTPSLocked())
-	joined := timing + statusSeparator + throughput
+	prefill := "↑" + formatRate(turnTimer.averagePrefillLocked())
+	decode := "↓" + formatRate(turnTimer.averageDecodeLocked())
+	joined := statusPrefix + prefill + statusSeparator + decode
 	if width <= 0 || lipgloss.Width(joined) <= width {
 		return []string{joined}
 	}
-	return []string{truncateLine(timing, width), truncateLine(throughput, width)}
+	// The label and one rate per line: a measurement is never cut into while
+	// it has a line of its own to sit on.
+	if head := statusPrefix + prefill; lipgloss.Width(head) <= width {
+		return []string{head, truncateLine(decode, width)}
+	}
+	return []string{
+		truncateLine(strings.TrimRight(statusPrefix, " "), width),
+		truncateLine(prefill+statusSeparator+decode, width),
+	}
 }
 
 // MetricsForWidth returns the generation metrics of the assistant message with
@@ -467,20 +503,23 @@ func decodeWindow(stepStart, firstToken, finished time.Time) time.Duration {
 	return window
 }
 
-// averageTTFTLocked returns the session's average time to first token, or "-"
-// when no step has been measured yet. Callers must hold turnTimer.mu.
-func (t *metricsTracker) averageTTFTLocked() string {
-	if t.ttftSteps == 0 {
-		return "-"
+// averagePrefillLocked returns the session's average prefill speed: the prompt
+// tokens every measured step read over the total time it took them to reach
+// their first token. Weighting by prompt tokens this way keeps the rate
+// independent of the prompt size, which is what makes it comparable between
+// steps and sessions. Callers must hold turnTimer.mu.
+func (t *metricsTracker) averagePrefillLocked() (float64, bool) {
+	if t.ttftSum <= 0 || t.promptTokenSum <= 0 {
+		return 0, false
 	}
-	return formatTTFT(t.ttftSum / time.Duration(t.ttftSteps))
+	return float64(t.promptTokenSum) / t.ttftSum.Seconds(), true
 }
 
-// averageTPSLocked returns the session's average decode speed, which is the
+// averageDecodeLocked returns the session's average decode speed, which is the
 // output tokens every measured step produced over the total time they took to
 // produce them. Weighting by generation time this way keeps a short response
 // from outweighing a long one. Callers must hold turnTimer.mu.
-func (t *metricsTracker) averageTPSLocked() (float64, bool) {
+func (t *metricsTracker) averageDecodeLocked() (float64, bool) {
 	if t.windowSum <= 0 {
 		return 0, false
 	}
@@ -547,10 +586,20 @@ func formatTPS(tps float64, ok bool) string {
 	if !ok {
 		return "- tps"
 	}
-	if tps >= 100 {
-		return fmt.Sprintf("%.0f tps", tps)
+	return formatRate(tps, true) + " tps"
+}
+
+// formatRate renders a token rate as a bare number: whole numbers at 100 and
+// above, one decimal below, and "-" when nothing has been measured. The unit is
+// carried by the label the caller prints it under.
+func formatRate(rate float64, ok bool) string {
+	if !ok {
+		return "-"
 	}
-	return fmt.Sprintf("%.1f tps", tps)
+	if rate >= 100 {
+		return fmt.Sprintf("%.0f", rate)
+	}
+	return fmt.Sprintf("%.1f", rate)
 }
 
 // formatElapsed renders a duration the way the working indicator shows it:
