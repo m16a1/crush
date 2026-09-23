@@ -101,6 +101,11 @@ type (
 	ActionRegenerateTitle struct {
 		SessionID string
 	}
+	// ActionExportSession writes the session's messages to a Markdown file
+	// in the workspace directory.
+	ActionExportSession struct {
+		SessionID string
+	}
 	// ActionSelectReasoningEffort is a message indicating a reasoning effort
 	// has been selected.
 	ActionSelectReasoningEffort struct {

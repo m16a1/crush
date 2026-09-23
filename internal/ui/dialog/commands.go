@@ -459,6 +459,7 @@ func (c *Commands) defaultCommands() []*CommandItem {
 		commands = append(commands,
 			NewCommandItem(c.com.Styles, "summarize", "Summarize Session", "", ActionSummarize{SessionID: c.sessionID}),
 			NewCommandItem(c.com.Styles, "regenerate_title", "Regenerate Title", "", ActionRegenerateTitle{SessionID: c.sessionID}).WithAliases("retitle"),
+			NewCommandItem(c.com.Styles, "export_session", "Export Session", "", ActionExportSession{SessionID: c.sessionID}).WithAliases("markdown"),
 		)
 	}
 

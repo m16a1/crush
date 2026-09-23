@@ -36,6 +36,7 @@ import (
 	"github.com/charmbracelet/crush/internal/commands"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/event"
+	"github.com/charmbracelet/crush/internal/export"
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/history"
 	"github.com/charmbracelet/crush/internal/home"
@@ -2254,6 +2255,25 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 				return util.ReportError(err)()
 			}
 			return util.NewInfoMsg("Regenerated session title")
+		})
+		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionExportSession:
+		sessionID := msg.SessionID
+		cmds = append(cmds, func() tea.Msg {
+			ctx := context.Background()
+			sess, err := m.com.Workspace.GetSession(ctx, sessionID)
+			if err != nil {
+				return util.ReportError(err)()
+			}
+			msgs, err := m.com.Workspace.ListMessages(ctx, sessionID)
+			if err != nil {
+				return util.ReportError(err)()
+			}
+			path, err := export.Write(m.com.Workspace.WorkingDir(), sess, msgs)
+			if err != nil {
+				return util.ReportError(err)()
+			}
+			return util.NewInfoMsg("Exported session to " + path)
 		})
 		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionToggleHelp:
