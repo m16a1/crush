@@ -437,7 +437,10 @@ func TestLiveStatusPrefersTheReportedUsage(t *testing.T) {
 	require.NotContains(t, status, "↓100", "the estimate gives way to the reported count")
 }
 
-func TestLiveStatusCarriesTheLastStepIntoTheNextOne(t *testing.T) {
+// TestNewStepShowsNothingUntilItsFirstToken: a fresh response reports its own
+// measurements, not the numbers of the response before it. Until its first
+// token arrives it has none to show.
+func TestNewStepShowsNothingUntilItsFirstToken(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
@@ -445,13 +448,13 @@ func TestLiveStatusCarriesTheLastStepIntoTheNextOne(t *testing.T) {
 	measureStep(t, "m1", 100, 2*time.Millisecond)
 	FinishStep(12_300, 456)
 
-	// The next step has produced nothing yet, so the indicator keeps showing
-	// the numbers of the step before it rather than a row of dashes.
 	StartStep("m2")
 	status := MetricsStatus()
-	require.Contains(t, status, "↑12.3K")
-	require.Contains(t, status, "↓456")
-	require.Regexp(t, `ttft [0-9]+ms`, status)
+	require.Contains(t, status, "ttft -", "the new response has no time to first token yet")
+	require.Contains(t, status, "- tps", "nor a decode speed")
+	require.Contains(t, status, "↑-")
+	require.Contains(t, status, "↓-")
+	require.NotContains(t, status, "12.3K", "the previous response's counts are not the new one's")
 }
 
 // TestBufferedStepIsTimedFromTheStartOfTheStep: a slow model can hold its

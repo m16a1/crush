@@ -365,9 +365,10 @@ func tokenCountParts(promptTokens, completionTokens int64) []string {
 }
 
 // livePartsLocked returns the parts of the live generation status of the
-// tracked step. Every measurement falls back to the most recent completed step
-// and then to "-", so the indicator never loses a segment between steps.
-// Callers must hold turnTimer.mu.
+// tracked step. A step that has produced nothing yet reports "-" rather than
+// the numbers of the response before it; those belong to that response. With
+// no step being tracked at all, the last completed step keeps the indicator
+// populated. Callers must hold turnTimer.mu.
 func (t *metricsTracker) livePartsLocked() []string {
 	var parts []string
 	if t.active {
@@ -375,11 +376,18 @@ func (t *metricsTracker) livePartsLocked() []string {
 	}
 
 	metrics, tracked := t.steps[t.stepMessageID]
+	// A step whose message has started but has produced nothing yet reports
+	// nothing of its own: the numbers of the previous response belong to that
+	// response, not this one.
+	stepStarted := t.stepMessageID != ""
 	estimatedTokens, estimatedTPS, hasEstimate := t.liveEstimateLocked()
 
 	ttft := t.lastTTFT
-	if tracked && metrics.ttft > 0 {
+	switch {
+	case tracked && metrics.ttft > 0:
 		ttft = metrics.ttft
+	case stepStarted:
+		ttft = 0
 	}
 
 	tps, hasTPS := t.lastTPS, t.lastTPS > 0
@@ -388,11 +396,16 @@ func (t *metricsTracker) livePartsLocked() []string {
 		tps, hasTPS = metrics.tps, true
 	case hasEstimate:
 		tps, hasTPS = estimatedTPS, true
+	case stepStarted:
+		tps, hasTPS = 0, false
 	}
 
 	promptTokens := t.lastPromptTokens
-	if tracked && metrics.promptTokens > 0 {
+	switch {
+	case tracked && metrics.promptTokens > 0:
 		promptTokens = metrics.promptTokens
+	case stepStarted:
+		promptTokens = 0
 	}
 
 	outputTokens := t.lastOutputTokens
@@ -401,6 +414,8 @@ func (t *metricsTracker) livePartsLocked() []string {
 		outputTokens = metrics.tokens
 	case hasEstimate:
 		outputTokens = estimatedTokens
+	case stepStarted:
+		outputTokens = 0
 	}
 
 	parts = append(parts, "ttft "+formatTTFTValue(ttft), formatTPS(tps, hasTPS))
