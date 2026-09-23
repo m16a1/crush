@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRegenerateTitleBoundsALongFirstPrompt: a session that opens with a pasted
+// TestGenerateTitleBoundsALongFirstPrompt: a session that opens with a pasted
 // file or log must still get a title, so only the opening of that prompt is
 // sent to the title model instead of the whole thing.
-func TestRegenerateTitleBoundsALongFirstPrompt(t *testing.T) {
+func TestGenerateTitleBoundsALongFirstPrompt(t *testing.T) {
 	t.Parallel()
 
 	env := testEnv(t)
@@ -23,9 +23,8 @@ func TestRegenerateTitleBoundsALongFirstPrompt(t *testing.T) {
 
 	const head = "investigate why the sidebar shows empty resource blocks"
 	prompt := head + " " + strings.Repeat("lorem ipsum dolor sit amet ", 1000) + "TAILMARKER"
-	userTextMessage(t, env, session.ID, prompt)
 
-	require.NoError(t, agent.RegenerateTitle(t.Context(), session.ID))
+	agent.GenerateTitle(t.Context(), session.ID, prompt)
 
 	sent := model.lastPrompt()
 	require.Contains(t, sent, head, "the title is based on the start of the prompt")

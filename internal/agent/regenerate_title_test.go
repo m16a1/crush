@@ -63,6 +63,12 @@ func (m *titleAnswerModel) lastPrompt() string {
 	return m.prompt
 }
 
+func (m *titleAnswerModel) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
 // titleErrorModel fails every request, which is how a title regeneration
 // fails before it can produce any output.
 type titleErrorModel struct{}
@@ -96,10 +102,20 @@ func userTextMessage(t *testing.T, env fakeEnv, sessionID, text string) {
 	require.NoError(t, err)
 }
 
-// TestRegenerateTitleUsesTheSessionsFirstPrompt: a regenerated title describes
-// what started the session, so it is built from the first prompt and not from
-// whatever the conversation has drifted into since.
-func TestRegenerateTitleUsesTheSessionsFirstPrompt(t *testing.T) {
+// assistantTextMessage stores an assistant reply on the session.
+func assistantTextMessage(t *testing.T, env fakeEnv, sessionID, text string) {
+	t.Helper()
+	_, err := env.messages.Create(t.Context(), sessionID, message.CreateMessageParams{
+		Role:  message.Assistant,
+		Parts: []message.ContentPart{message.TextContent{Text: text}},
+	})
+	require.NoError(t, err)
+}
+
+// TestRegenerateTitleUsesTheWholeConversation: a regenerated title describes
+// what the session became, so the model is given the whole conversation rather
+// than the prompt that started it.
+func TestRegenerateTitleUsesTheWholeConversation(t *testing.T) {
 	t.Parallel()
 
 	env := testEnv(t)
@@ -110,6 +126,7 @@ func TestRegenerateTitleUsesTheSessionsFirstPrompt(t *testing.T) {
 	require.NoError(t, err)
 
 	userTextMessage(t, env, session.ID, "why is the sidebar showing empty blocks")
+	assistantTextMessage(t, env, session.ID, "the empty sections were always rendered")
 	userTextMessage(t, env, session.ID, "and now the footer")
 
 	require.NoError(t, agent.RegenerateTitle(t.Context(), session.ID))
@@ -118,9 +135,32 @@ func TestRegenerateTitleUsesTheSessionsFirstPrompt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Sidebar metrics", updated.Title)
 
-	prompt := model.lastPrompt()
-	require.Contains(t, prompt, "why is the sidebar showing empty blocks")
-	require.NotContains(t, prompt, "and now the footer", "the title describes the first prompt only")
+	sent := model.lastPrompt()
+	require.Contains(t, sent, "why is the sidebar showing empty blocks")
+	require.Contains(t, sent, "the empty sections were always rendered", "the replies are part of what is named")
+	require.Contains(t, sent, "and now the footer", "the conversation does not stop at the first prompt")
+}
+
+// TestRegenerateTitleUsesTheLargeModel: only the model that saw the whole
+// conversation can name it, so the cheap model used for a first prompt is not
+// asked.
+func TestRegenerateTitleUsesTheLargeModel(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	large := &titleAnswerModel{}
+	small := &titleAnswerModel{}
+	agent := testSessionAgent(env, large, small, "test system prompt")
+
+	session, err := env.sessions.Create(t.Context(), DefaultSessionName)
+	require.NoError(t, err)
+
+	userTextMessage(t, env, session.ID, "why is the sidebar showing empty blocks")
+
+	require.NoError(t, agent.RegenerateTitle(t.Context(), session.ID))
+
+	require.Equal(t, 1, large.callCount(), "the large model names the session")
+	require.Equal(t, 0, small.callCount(), "the small model is not asked")
 }
 
 // TestRegenerateTitleKeepsTheTitleWhenGenerationFails: the session already has

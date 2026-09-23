@@ -63,6 +63,11 @@ const (
 	// and fails the request, leaving the session unnamed.
 	maxTitlePromptChars = 2000
 
+	// titleMaxOutputTokens is the output budget a title request gets when
+	// the model has no usable maximum of its own. Titles are short; the
+	// budget only needs room for a model that thinks before answering.
+	titleMaxOutputTokens = 1024
+
 	// maxTitleChars is the longest title kept, matching the length the
 	// title model is asked to stay under.
 	maxTitleChars = 50
@@ -1745,6 +1750,28 @@ func hasUserTextMessage(msgs []message.Message) bool {
 	return false
 }
 
+// titleRequest describes what a session title is generated from and which
+// models may produce it.
+type titleRequest struct {
+	// prompt is the text the title describes, and the source of the fallback
+	// title when naming fails.
+	prompt string
+	// history, when set, is the conversation sent to the model instead of the
+	// prompt. Regenerating a title uses it to name a session after what it
+	// became rather than how it started.
+	history []fantasy.Message
+	// attempts are the models to try, in order.
+	attempts []modelAttempt
+	// keepExisting leaves the current title in place when naming fails.
+	keepExisting bool
+}
+
+// modelAttempt is a model a title request may be served by, named for logs.
+type modelAttempt struct {
+	name  string
+	model Model
+}
+
 // GenerateTitle generates a session title based on the initial prompt. A
 // session that cannot be titled keeps the default name, which is what a
 // brand-new session is already called.
@@ -1752,15 +1779,23 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 	if userPrompt == "" {
 		return
 	}
-	if err := a.generateTitle(ctx, sessionID, userPrompt, false); err != nil {
+	req := titleRequest{
+		prompt: userPrompt,
+		attempts: []modelAttempt{
+			{"small", a.smallModel.Get()},
+			{"large", a.largeModel.Get()},
+		},
+	}
+	if err := a.generateTitle(ctx, sessionID, req); err != nil {
 		slog.Error("Failed to generate session title", "error", err)
 	}
 }
 
 // RegenerateTitle replaces the session's title with one generated from the
-// prompt that started it. Unlike GenerateTitle it reports why it failed and
-// leaves the current title in place, because the session already has a usable
-// name to lose.
+// conversation the session became, using the large model over the whole
+// transcript. Unlike GenerateTitle it reports why it failed and leaves the
+// current title in place, because the session already has a usable name to
+// lose.
 func (a *sessionAgent) RegenerateTitle(ctx context.Context, sessionID string) error {
 	if a.IsSessionBusy(sessionID) {
 		return ErrSessionBusy
@@ -1774,36 +1809,24 @@ func (a *sessionAgent) RegenerateTitle(ctx context.Context, sessionID string) er
 	if err != nil {
 		return err
 	}
-
-	for _, msg := range msgs {
-		if msg.Role != message.User {
-			continue
-		}
-		if prompt := titlePromptFromMessage(msg); prompt != "" {
-			return a.generateTitle(ctx, sessionID, prompt, true)
-		}
+	if !hasUserTextMessage(msgs) {
+		return errors.New("session has no prompt to base a title on")
 	}
-	return errors.New("session has no prompt to base a title on")
-}
 
-// titlePromptFromMessage returns the text a title can be generated from: the
-// message's text parts, or the shell command it ran, matching the prompt the
-// automatic title uses for a session that starts with a bang command.
-func titlePromptFromMessage(msg message.Message) string {
-	var parts []string
-	for _, part := range msg.Parts {
-		switch p := part.(type) {
-		case message.TextContent:
-			if p.Text != "" {
-				parts = append(parts, p.Text)
-			}
-		case message.ShellCommand:
-			if p.Command != "" {
-				parts = append(parts, "$ "+p.Command)
-			}
-		}
+	bigModel := a.largeModel.Get()
+	// The model sees the conversation the way a turn does, so the session is
+	// named after what it became, not after the prompt that started it. Image
+	// attachments are left out: a title does not need them.
+	history, _ := a.preparePrompt(msgs, false)
+	if len(history) == 0 {
+		return errors.New("session has no conversation to base a title on")
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
+
+	return a.generateTitle(ctx, sessionID, titleRequest{
+		history:      history,
+		attempts:     []modelAttempt{{"large", bigModel}},
+		keepExisting: true,
+	})
 }
 
 // titleFromPrompt names a session after its prompt, used when the title model
@@ -1817,28 +1840,30 @@ func titleFromPrompt(prompt string) string {
 	return cmp.Or(fallback, DefaultSessionName)
 }
 
-// generateTitle builds a title from userPrompt and stores it. When
-// keepExisting is set the session keeps the title it has if generation fails;
-// otherwise the session is named after the prompt so it is never left on the
-// placeholder name.
-func (a *sessionAgent) generateTitle(ctx context.Context, sessionID, userPrompt string, keepExisting bool) error {
-	if userPrompt == "" {
-		return errors.New("no prompt to generate a title from")
-	}
-
-	// Send only the opening of the prompt. A long first message is
-	// otherwise sent whole, which overflows the title model's context
-	// window and fails the request, and the opening is what names a
-	// session anyway.
-	if runes := []rune(userPrompt); len(runes) > maxTitlePromptChars {
-		userPrompt = string(runes[:maxTitlePromptChars])
+// generateTitle builds a title from the request and stores it. When the
+// request keeps the existing title, the session keeps the title it has if
+// generation fails; otherwise the session is named after the prompt so it is
+// never left on the placeholder name.
+func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, req titleRequest) error {
+	userPrompt := req.prompt
+	if len(req.history) == 0 {
+		if userPrompt == "" {
+			return errors.New("no prompt to generate a title from")
+		}
+		// Send only the opening of the prompt. A long first message is
+		// otherwise sent whole, which overflows the title model's context
+		// window and fails the request, and the opening is what names a
+		// session anyway.
+		if runes := []rune(userPrompt); len(runes) > maxTitlePromptChars {
+			userPrompt = string(runes[:maxTitlePromptChars])
+		}
 	}
 
 	// Ensure the session always gets a title even if every path below
 	// fails or the context is cancelled before we finish.
 	var titleSaved bool
 	defer func() {
-		if titleSaved || keepExisting {
+		if titleSaved || req.keepExisting || userPrompt == "" {
 			return
 		}
 		fallbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -1848,8 +1873,6 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID, userPrompt 
 		}
 	}()
 
-	smallModel := a.smallModel.Get()
-	largeModel := a.largeModel.Get()
 	systemPromptPrefix := a.systemPromptPrefix.Get()
 
 	newAgent := func(m fantasy.LanguageModel, p []byte, tok int64) fantasy.Agent {
@@ -1874,45 +1897,54 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID, userPrompt 
 			return callCtx, prepared, nil
 		},
 	}
-
-	type modelAttempt struct {
-		name  string
-		model Model
-	}
-	attempts := []modelAttempt{
-		{"small", smallModel},
-		{"large", largeModel},
+	if len(req.history) > 0 {
+		// The instruction comes after the conversation it names.
+		streamCall.Messages = req.history
+		streamCall.Prompt = "Generate a concise title for the conversation above:\n  thinking\n\n response"
+	} else {
+		streamCall.Prompt = fmt.Sprintf("Generate a concise title for the following content:\n\n%s\n  thinking\n\n response", userPrompt)
 	}
 
 	var resp *fantasy.AgentResult
 	var err error
 	var model Model
 	var success bool
-	for _, attempt := range attempts {
+	for _, attempt := range req.attempts {
 		tok := int64(40)
 		if attempt.model.CatwalkCfg.CanReason {
 			tok = attempt.model.CatwalkCfg.DefaultMaxTokens
 		}
+		// A model configured without a maximum of its own reports zero,
+		// which asks the provider for a zero-token reply: the title came
+		// back empty with a length finish and every attempt "hit the
+		// token limit". Give the request a real budget instead.
+		if tok <= 0 {
+			tok = titleMaxOutputTokens
+		}
 		agent := newAgent(attempt.model.Model, titlePrompt, tok)
 		resp, err = agent.Stream(ctx, streamCall)
-		if err == nil && resp.Response.FinishReason != fantasy.FinishReasonLength {
-			model = attempt.model
-			slog.Debug("Generated title with " + attempt.name + " model")
-			success = true
-			break
-		}
 		if err != nil {
 			slog.Error("Error generating title with "+attempt.name+" model; trying next", "err", err)
-		} else {
-			slog.Error("Title generation hit token limit with " + attempt.name + " model; trying next")
+			continue
 		}
+		// Take whatever text the model returned, even when it stopped at
+		// the token limit: a title cut short still names the session
+		// better than none, which is what rejecting it would leave.
+		if strings.TrimSpace(resp.Response.Content.Text()) == "" {
+			slog.Error("Title generation returned no text with " + attempt.name + " model; trying next")
+			continue
+		}
+		model = attempt.model
+		slog.Debug("Generated title with " + attempt.name + " model")
+		success = true
+		break
 	}
 	if !success {
-		// The deferred fallback saves the default session name.
+		// The deferred fallback saves a title derived from the prompt.
 		if err != nil {
 			return fmt.Errorf("failed to generate session title: %w", err)
 		}
-		return errors.New("failed to generate session title: every model hit the token limit")
+		return errors.New("failed to generate session title: every model returned no title")
 	}
 
 	// Clean up title.
@@ -1925,8 +1957,13 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID, userPrompt 
 
 	title = strings.TrimSpace(title)
 	if title == "" {
-		// LLM returned empty content. Name the session after the
-		// prompt rather than leaving the generic default in place.
+		// LLM returned empty content (only thinking, say). Name the
+		// session after the prompt rather than leaving the generic
+		// default in place; a conversation-based request has no prompt
+		// to fall back to and keeps the title it has.
+		if userPrompt == "" {
+			return errors.New("failed to generate session title: model returned no title")
+		}
 		title = titleFromPrompt(userPrompt)
 	}
 
