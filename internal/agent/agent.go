@@ -63,10 +63,16 @@ const (
 	// and fails the request, leaving the session unnamed.
 	maxTitlePromptChars = 2000
 
-	// titleMaxOutputTokens is the output budget a title request gets when
-	// the model has no usable maximum of its own. Titles are short; the
-	// budget only needs room for a model that thinks before answering.
+	// titleMaxOutputTokens is the smallest output budget a title request
+	// gets. Titles are short; the budget only needs room for a model that
+	// thinks before answering.
 	titleMaxOutputTokens = 1024
+
+	// titleRetryOutputTokens is the budget a title request is retried with
+	// when the model spent the whole first budget reasoning and returned no
+	// text. It is comfortably larger than any reasoning block observed
+	// before a one-line answer, so the title has room to follow.
+	titleRetryOutputTokens = 32768
 
 	// maxTitleChars is the longest title kept, matching the length the
 	// title model is asked to stay under.
@@ -86,6 +92,13 @@ var (
 	thinkTagRegex       = regexp.MustCompile(`(?s)<think>.*?</think>`)
 	orphanThinkTagRegex = regexp.MustCompile(`</?think>`)
 )
+
+// titleInstructionSuffix ends a title instruction with an already-opened,
+// empty thinking block. A model with a thinking channel then answers
+// immediately instead of spending its output budget on reasoning and
+// returning no title at all. The tags are written with escapes because
+// editors and other tooling have a habit of stripping angle-bracketed words.
+const titleInstructionSuffix = "\n " + "\x3cthink\x3e" + "\n\n" + "\x3c/think\x3e"
 
 type SessionAgentCall struct {
 	SessionID string
@@ -1840,6 +1853,19 @@ func titleFromPrompt(prompt string) string {
 	return cmp.Or(fallback, DefaultSessionName)
 }
 
+// titleOutputBudget returns the output budget a title request gets for a
+// model. Titles are short, but a model that thinks before answering spends
+// part of the budget on reasoning, so a budget that only fits the title is
+// spent entirely on reasoning and the request comes back with no text at
+// all. The budget therefore always leaves room for both, and grows to the
+// model's own maximum when it has one.
+func titleOutputBudget(m Model) int64 {
+	if m.CatwalkCfg.CanReason && m.CatwalkCfg.DefaultMaxTokens > titleMaxOutputTokens {
+		return m.CatwalkCfg.DefaultMaxTokens
+	}
+	return titleMaxOutputTokens
+}
+
 // generateTitle builds a title from the request and stores it. When the
 // request keeps the existing title, the session keeps the title it has if
 // generation fails; otherwise the session is named after the prompt so it is
@@ -1885,7 +1911,7 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, req 
 	}
 
 	streamCall := fantasy.AgentStreamCall{
-		Prompt:  fmt.Sprintf("Generate a concise title for the following content:\n\n%s\n <think>\n\n</think>", userPrompt),
+		Prompt:  fmt.Sprintf("Generate a concise title for the following content:\n\n%s", userPrompt) + titleInstructionSuffix,
 		Headers: sessionHeaders(sessionID),
 		PrepareStep: func(callCtx context.Context, opts fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
 			prepared.Messages = opts.Messages
@@ -1900,9 +1926,9 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, req 
 	if len(req.history) > 0 {
 		// The instruction comes after the conversation it names.
 		streamCall.Messages = req.history
-		streamCall.Prompt = "Generate a concise title for the conversation above:\n  thinking\n\n response"
+		streamCall.Prompt = "Generate a concise title for the conversation above:" + titleInstructionSuffix
 	} else {
-		streamCall.Prompt = fmt.Sprintf("Generate a concise title for the following content:\n\n%s\n  thinking\n\n response", userPrompt)
+		streamCall.Prompt = fmt.Sprintf("Generate a concise title for the following content:\n\n%s", userPrompt) + titleInstructionSuffix
 	}
 
 	var resp *fantasy.AgentResult
@@ -1910,34 +1936,37 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, req 
 	var model Model
 	var success bool
 	for _, attempt := range req.attempts {
-		tok := int64(40)
-		if attempt.model.CatwalkCfg.CanReason {
-			tok = attempt.model.CatwalkCfg.DefaultMaxTokens
+		tok := titleOutputBudget(attempt.model)
+		for !success {
+			agent := newAgent(attempt.model.Model, titlePrompt, tok)
+			resp, err = agent.Stream(ctx, streamCall)
+			if err != nil {
+				slog.Error("Error generating title with "+attempt.name+" model; trying next", "err", err)
+				break
+			}
+			// Take whatever text the model returned, even when it stopped
+			// at the token limit: a title cut short still names the
+			// session better than none, which is what rejecting it would
+			// leave.
+			if strings.TrimSpace(resp.Response.Content.Text()) != "" {
+				model = attempt.model
+				slog.Debug("Generated title with " + attempt.name + " model")
+				success = true
+				break
+			}
+			// A model that thinks before answering can spend the whole
+			// budget reasoning and return no text. Give it one more try
+			// with room for both before moving on to the next model.
+			if tok >= titleRetryOutputTokens {
+				slog.Error("Title generation returned no text with " + attempt.name + " model; trying next")
+				break
+			}
+			tok = min(tok*4, titleRetryOutputTokens)
+			slog.Debug("Title generation returned no text with "+attempt.name+" model; retrying with a larger budget", "tokens", tok)
 		}
-		// A model configured without a maximum of its own reports zero,
-		// which asks the provider for a zero-token reply: the title came
-		// back empty with a length finish and every attempt "hit the
-		// token limit". Give the request a real budget instead.
-		if tok <= 0 {
-			tok = titleMaxOutputTokens
+		if success {
+			break
 		}
-		agent := newAgent(attempt.model.Model, titlePrompt, tok)
-		resp, err = agent.Stream(ctx, streamCall)
-		if err != nil {
-			slog.Error("Error generating title with "+attempt.name+" model; trying next", "err", err)
-			continue
-		}
-		// Take whatever text the model returned, even when it stopped at
-		// the token limit: a title cut short still names the session
-		// better than none, which is what rejecting it would leave.
-		if strings.TrimSpace(resp.Response.Content.Text()) == "" {
-			slog.Error("Title generation returned no text with " + attempt.name + " model; trying next")
-			continue
-		}
-		model = attempt.model
-		slog.Debug("Generated title with " + attempt.name + " model")
-		success = true
-		break
 	}
 	if !success {
 		// The deferred fallback saves a title derived from the prompt.
@@ -1965,6 +1994,12 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, req 
 			return errors.New("failed to generate session title: model returned no title")
 		}
 		title = titleFromPrompt(userPrompt)
+	}
+	// A model that rambled past the one-line answer still names the
+	// session, so keep the title within the length the model is asked for
+	// rather than rejecting it.
+	if ansi.StringWidth(title) > maxTitleChars {
+		title = ansi.Truncate(title, maxTitleChars, "…")
 	}
 
 	// Calculate usage and cost.
