@@ -453,3 +453,40 @@ func TestLiveStatusCarriesTheLastStepIntoTheNextOne(t *testing.T) {
 	require.Contains(t, status, "↓456")
 	require.Regexp(t, `ttft [0-9]+ms`, status)
 }
+
+// TestBufferedStepIsTimedFromTheStartOfTheStep: a slow model can hold its
+// output back and deliver it in one burst. Timing the burst alone would report
+// thousands of tokens per second, so the reading is taken over the whole step
+// and the wait for the output counts.
+func TestBufferedStepIsTimedFromTheStartOfTheStep(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	time.Sleep(300 * time.Millisecond)
+	MarkFirstToken()
+	MarkStepFinished()
+	FinishStep(0, 60)
+
+	speed := tpsOf(t, MetricsForWidth("m1", 0, 0, 200))
+	require.Less(t, speed, 1000.0, "a burst is not a decode speed")
+	require.Greater(t, speed, 50.0, "the rate is measured over the whole step")
+}
+
+// TestLiveStatusDoesNotReportABurstAsADecodeSpeed: the same applies while the
+// step is still streaming, which is where the absurd rates were showing up.
+func TestLiveStatusDoesNotReportABurstAsADecodeSpeed(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	StartStep("m1")
+	time.Sleep(300 * time.Millisecond)
+	MarkFirstToken()
+	MarkStreamedOutput(240)
+
+	status := MetricsStatus()
+	require.Contains(t, status, "↓60", "240 streamed characters estimate 60 tokens")
+	require.Less(t, tpsOf(t, status), 1000.0, "the live rate is not the burst rate")
+}

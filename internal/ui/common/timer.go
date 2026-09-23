@@ -23,6 +23,13 @@ const maxTrackedSteps = 128
 // which would report an absurd rate instead of none at all.
 const minThroughputWindow = time.Millisecond
 
+// minDecodeWindow is the shortest decode window a throughput reading is
+// measured over. Below it the first token and the last arrive together, which
+// means the provider held the output back and delivered it in one burst; the
+// burst alone has no duration to speak of, so the reading is taken over the
+// whole step instead and the wait for the output counts.
+const minDecodeWindow = 250 * time.Millisecond
+
 // estimatedTokenChars is how many streamed characters the live estimate counts
 // as one token, matching the fallback the agent uses when a provider reports no
 // usage (internal/agent/usage_fallback.go). It only feeds the working indicator
@@ -42,9 +49,9 @@ type stepMetrics struct {
 	tps float64
 	// hasTPS reports whether a decode speed measurement is available.
 	hasTPS bool
-	// window is the step's decode window, the time from its first token to
-	// its last. Kept so the session's aggregate throughput can drop this
-	// step's share when a more accurate count replaces it.
+	// window is the step's decode window, the time its tokens were counted
+	// over (see decodeWindow). Kept so the session's aggregate throughput can
+	// drop this step's share when a more accurate count replaces it.
 	window time.Duration
 }
 
@@ -260,7 +267,7 @@ func FinishStep(promptTokens, completionTokens int64) {
 	}
 
 	if completionTokens > 0 && !turnTimer.firstTokenTime.IsZero() && !turnTimer.stepFinishedAt.IsZero() {
-		elapsed := turnTimer.stepFinishedAt.Sub(turnTimer.firstTokenTime)
+		elapsed := decodeWindow(turnTimer.stepStartTime, turnTimer.firstTokenTime, turnTimer.stepFinishedAt)
 		if elapsed >= minThroughputWindow {
 			// Drop the step's earlier contribution, if it had one, so
 			// the aggregate covers the step once at its latest count.
@@ -417,12 +424,32 @@ func (t *metricsTracker) liveEstimateLocked() (tokens int64, tps float64, ok boo
 	if t.firstTokenTime.IsZero() || t.streamedChars <= 0 {
 		return 0, 0, false
 	}
-	elapsed := time.Since(t.firstTokenTime)
+	elapsed := decodeWindow(t.stepStartTime, t.firstTokenTime, time.Now())
 	if elapsed < minThroughputWindow {
 		return 0, 0, false
 	}
 	tokens = int64((t.streamedChars + estimatedTokenChars - 1) / estimatedTokenChars)
 	return tokens, float64(tokens) / elapsed.Seconds(), true
+}
+
+// decodeWindow returns the window a step's generation speed is measured over:
+// the time from its first token to its last, or the whole step when that is too
+// short to be a real decode window. A provider that holds the output back
+// delivers it in one burst, so the first token and the last arrive together and
+// timing the burst alone reads as a speed no model can reach; the step's own
+// clock cannot be beaten.
+func decodeWindow(stepStart, firstToken, finished time.Time) time.Duration {
+	if firstToken.IsZero() {
+		firstToken = stepStart
+	}
+	window := finished.Sub(firstToken)
+	if window >= minDecodeWindow {
+		return window
+	}
+	if total := finished.Sub(stepStart); total > window {
+		return total
+	}
+	return window
 }
 
 // averageTTFTLocked returns the session's average time to first token, or "-"
