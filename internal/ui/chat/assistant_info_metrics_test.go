@@ -130,6 +130,94 @@ func TestAssistantInfoItemTrimsMetricsToAvailableWidth(t *testing.T) {
 	require.NotContains(t, render(36), "↓456", "no metrics when there is no room at all")
 }
 
+// TestShouldShowAssistantInfoForToolUseTurns pins which turns get a footer.
+// A tool-use turn does, because its metrics are what show a tool-driven
+// session is still moving; a turn that ended for any other reason does not,
+// unless it was routed through Prism.
+func TestShouldShowAssistantInfoForToolUseTurns(t *testing.T) {
+	t.Parallel()
+
+	finished := func(reason message.FinishReason) *message.Message {
+		return &message.Message{Parts: []message.ContentPart{message.Finish{Reason: reason}}}
+	}
+
+	require.True(t, ShouldShowAssistantInfo(finished(message.FinishReasonEndTurn)))
+	require.True(t, ShouldShowAssistantInfo(finished(message.FinishReasonToolUse)))
+
+	require.False(t, ShouldShowAssistantInfo(finished(message.FinishReasonMaxTokens)))
+	require.False(t, ShouldShowAssistantInfo(finished(message.FinishReasonContentFilter)))
+	require.False(t, ShouldShowAssistantInfo(&message.Message{}))
+
+	routed := finished(message.FinishReasonMaxTokens)
+	routed.PrismModelName = "GLM 5.3"
+	require.True(t, ShouldShowAssistantInfo(routed), "a Prism-routed turn is shown however it ended")
+}
+
+// TestAssistantInfoItemShowsMetricsOnToolUseTurns: a turn that hands off to a
+// tool gets the same generation metrics as the final turn, laid out as a
+// compact heading. Without it a long run of tool calls shows nothing between
+// the tool items to say how fast the model is producing them.
+func TestAssistantInfoItemShowsMetricsOnToolUseTurns(t *testing.T) {
+	sty := styles.CharmtonePantera()
+
+	common.StartTurn()
+	t.Cleanup(common.StopTurn)
+	common.ResetMetrics()
+	t.Cleanup(common.ResetMetrics)
+	measureTestStep("a-tool", 200)
+
+	msg := &message.Message{
+		ID:       "a-tool",
+		Role:     message.Assistant,
+		Model:    "gpt-x",
+		Provider: "openai",
+		Parts: []message.ContentPart{
+			message.ToolCall{ID: "tc1", Name: "edit", Input: "{}", Finished: true},
+			message.Finish{Reason: message.FinishReasonToolUse, Time: 1735689600},
+		},
+	}
+	msg.SetFinishUsage(12_300, 456)
+
+	item := NewAssistantInfoItem(&sty, msg, metricsTestConfig(), time.Unix(1735689590, 0))
+	rendered := ansi.Strip(item.Render(120))
+	require.Regexp(t, `Unknown Model · ttft `, rendered, "the heading keeps the model name, then the step metrics")
+	require.Contains(t, rendered, "tps")
+	require.Contains(t, rendered, "↑12.3K")
+	require.Contains(t, rendered, "↓456")
+	require.NotContains(t, rendered, "via ", "the compact heading drops the provider")
+}
+
+// TestAssistantInfoItemToolUseHeadingSurvivesNarrowWidths: the compact heading
+// keeps the model name and drops metrics as the column narrows, just as the
+// final footer does.
+func TestAssistantInfoItemToolUseHeadingSurvivesNarrowWidths(t *testing.T) {
+	sty := styles.CharmtonePantera()
+
+	common.ResetMetrics()
+	t.Cleanup(common.ResetMetrics)
+
+	msg := &message.Message{
+		ID:       "a-narrow",
+		Role:     message.Assistant,
+		Model:    "gpt-x",
+		Provider: "openai",
+		Parts: []message.ContentPart{
+			message.ToolCall{ID: "tc1", Name: "edit", Input: "{}", Finished: true},
+			message.Finish{Reason: message.FinishReasonToolUse, Time: 1735689600},
+		},
+	}
+	msg.SetFinishUsage(12_300, 456)
+
+	render := func(width int) string {
+		item := NewAssistantInfoItem(&sty, msg, metricsTestConfig(), time.Unix(1735689590, 0))
+		return ansi.Strip(item.Render(width))
+	}
+
+	require.Contains(t, render(120), "↑12.3K", "a wide heading keeps the token counts")
+	require.NotContains(t, render(20), "↑12.3K", "no metrics when there is no room at all")
+	require.Contains(t, render(20), "Unknown Model", "the model name is what stays")
+}
+
 func TestAssistantInfoItemRefreshesMetricsAfterInvalidation(t *testing.T) {
 	sty := styles.CharmtonePantera()
 	msg := timedAssistantMessageWithUsage("a-refresh", 12_300, 456)

@@ -81,12 +81,37 @@ func TestUpdateSessionMessage_PrismInfoBetweenTurns(t *testing.T) {
 	require.NotNil(t, m.chat.MessageItem(chat.AssistantInfoID("a1")))
 }
 
-// TestUpdateSessionMessage_NoPrismInfoWithoutName ensures intermediate turns
-// without a Prism-routed model name do not get an info item.
-func TestUpdateSessionMessage_NoPrismInfoWithoutName(t *testing.T) {
+// turnWithReason builds a finished assistant turn with the given finish reason
+// and Prism-routed model name.
+func turnWithReason(id string, reason message.FinishReason, prismName string) message.Message {
+	return message.Message{
+		ID:        id,
+		SessionID: "s1",
+		Role:      message.Assistant,
+		Model:     "prism-model",
+		Provider:  "hyper",
+		Parts: []message.ContentPart{
+			message.ToolCall{ID: "tc1", Name: "bash", Input: "{}", Finished: true},
+			message.Finish{Reason: reason, Time: 1735689600},
+		},
+		PrismModelName: prismName,
+	}
+}
+
+// TestUpdateSessionMessage_ToolUseInfoWithoutPrismName: a turn that hands off
+// to a tool gets a footer even without a Prism-routed model name, because the
+// footer carries the step's own generation metrics. A turn that ended for
+// another reason still gets none, so the chat is not filled with footers that
+// add nothing.
+func TestUpdateSessionMessage_ToolUseInfoWithoutPrismName(t *testing.T) {
 	m := newPrismTestUI()
 
 	_ = m.appendSessionMessage(prismToolTurn(false, ""))
 	_ = m.updateSessionMessage(prismToolTurn(true, ""))
-	require.Nil(t, m.chat.MessageItem(chat.AssistantInfoID("a1")))
+	require.NotNil(t, m.chat.MessageItem(chat.AssistantInfoID("a1")), "a tool-use turn shows its step metrics")
+
+	other := newPrismTestUI()
+	_ = other.appendSessionMessage(turnWithReason("a2", message.FinishReasonMaxTokens, ""))
+	_ = other.updateSessionMessage(turnWithReason("a2", message.FinishReasonMaxTokens, ""))
+	require.Nil(t, other.chat.MessageItem(chat.AssistantInfoID("a2")))
 }

@@ -1990,9 +1990,9 @@ func (m *UI) updateSessionMessage(msg message.Message) tea.Cmd {
 		m.chat.RemoveMessage(msg.ID)
 	}
 
-	// The info item shows for every turn with a Prism-routed model, and
-	// for the final turn of the prompt. It is removed again when the
-	// turn no longer qualifies (e.g. a retry reset the stream).
+	// The info item shows for every turn that ends the prompt or hands off
+	// to a tool, and for any Prism-routed turn. It is removed again when
+	// the turn no longer qualifies (e.g. a retry reset the stream).
 	if infoItem := m.chat.MessageItem(chat.AssistantInfoID(msg.ID)); chat.ShouldShowAssistantInfo(&msg) {
 		if infoItem == nil {
 			newInfoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0))

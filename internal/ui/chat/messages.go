@@ -23,6 +23,9 @@ const MessageLeftPaddingTotal = 2
 // maxTextWidth is the maximum width text messages can be
 const maxTextWidth = 120
 
+// assistantInfoSeparator joins the parts of an assistant info footer.
+const assistantInfoSeparator = " · "
+
 // Identifiable is an interface for items that can provide a unique identifier.
 type Identifiable interface {
 	ID() string
@@ -270,16 +273,22 @@ func AssistantInfoID(messageID string) string {
 }
 
 // ShouldShowAssistantInfo reports whether an assistant message should
-// render its info footer. The turn that ends the prompt always gets one;
-// intermediate turns only get one when a Prism-routed model name is
-// available, since that is the only case where the footer adds
-// per-turn information.
+// render its info footer. Every turn that ends the prompt or hands off to
+// a tool gets one: the former carries the model, provider and duration,
+// the latter the step's own token counts and generation timings, which is
+// what tells a busy tool-driven session apart from a stalled one. A
+// Prism-routed turn gets one regardless of how it ended, since the routed
+// model name is news on its own.
 func ShouldShowAssistantInfo(msg *message.Message) bool {
 	finishData := msg.FinishPart()
 	if finishData == nil {
 		return false
 	}
-	return finishData.Reason == message.FinishReasonEndTurn || msg.PrismModelName != ""
+	switch finishData.Reason {
+	case message.FinishReasonEndTurn, message.FinishReasonToolUse:
+		return true
+	}
+	return msg.PrismModelName != ""
 }
 
 // AssistantInfoItem renders model info and response time after assistant completes.
@@ -363,7 +372,8 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 		return ""
 	}
 	// The final turn of a prompt keeps the full footer (duration and
-	// separator line); intermediate turns render a compact header.
+	// separator line); intermediate turns render a compact heading that
+	// keeps the model name and whatever step metrics fit.
 	isFinalTurn := finishData.Reason == message.FinishReasonEndTurn
 
 	icon := a.sty.Messages.AssistantInfoIcon.Render(styles.ModelIcon)
@@ -381,10 +391,7 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 	}
 	savings := prismSavingsSuffix(a.sty, a.message)
 	if !isFinalTurn {
-		if savings != "" {
-			return fmt.Sprintf("%s %s %s", icon, modelFormatted, savings)
-		}
-		return fmt.Sprintf("%s %s", icon, modelFormatted)
+		return a.renderStepHeading(icon, modelFormatted, savings, width)
 	}
 	providerName := a.message.Provider
 	if providerConfig, ok := a.cfg.Providers.Get(a.message.Provider); ok {
@@ -400,7 +407,7 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 	budget := width - lipgloss.Width(assistantPrefix(icon, modelFormatted, provider)) - lipgloss.Width(timing)
 	metrics := common.MetricsForWidth(a.message.ID, finishData.PromptTokens, finishData.CompletionTokens, budget)
 	if metrics != "" {
-		timing += " · " + metrics
+		timing += assistantInfoSeparator + metrics
 	}
 	infoMsg := a.sty.Messages.AssistantInfoDuration.Render(timing)
 	assistant := fmt.Sprintf("%s %s %s %s", icon, modelFormatted, provider, infoMsg)
@@ -408,6 +415,28 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 		assistant = fmt.Sprintf("%s %s", assistant, savings)
 	}
 	return common.Section(a.sty, assistant, width)
+}
+
+// renderStepHeading renders the compact footer of a turn that handed off to a
+// tool. It keeps the model name and spends the rest of the line on the step's
+// own generation metrics, so a run of tool calls shows which step is slow
+// rather than a column of identical headings. The metrics describe the model
+// step that produced the tool call, not the tool itself.
+func (a *AssistantInfoItem) renderStepHeading(icon, modelFormatted, savings string, width int) string {
+	heading := fmt.Sprintf("%s %s", icon, modelFormatted)
+	if savings != "" {
+		heading += " " + savings
+	}
+	finishData := a.message.FinishPart()
+	if finishData == nil {
+		return heading
+	}
+	budget := width - lipgloss.Width(heading) - lipgloss.Width(assistantInfoSeparator)
+	metrics := common.MetricsForWidth(a.message.ID, finishData.PromptTokens, finishData.CompletionTokens, budget)
+	if metrics == "" {
+		return heading
+	}
+	return heading + assistantInfoSeparator + a.sty.Messages.AssistantInfoDuration.Render(metrics)
 }
 
 // assistantPrefix returns the space-separated prefix of an assistant footer,
