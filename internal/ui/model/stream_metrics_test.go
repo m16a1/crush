@@ -147,6 +147,62 @@ func TestStreamMetricsIgnoredForReplayedMessages(t *testing.T) {
 	require.Contains(t, rendered, "↓456")
 }
 
+// TestLivePromptEstimateCountsNewInputs: providers size a request only when it
+// answers, so a request in flight is estimated from the last measured prompt
+// plus the output it produced and the inputs the UI appended since. A follow-up
+// user message and a tool result both show up before the provider's own count
+// arrives and replaces the estimate.
+func TestLivePromptEstimateCountsNewInputs(t *testing.T) {
+	m := newMetricsTestUI()
+	common.StartTurn()
+	t.Cleanup(common.StopTurn)
+	common.ResetMetrics()
+	t.Cleanup(common.ResetMetrics)
+
+	first := streamedAssistantMessage("a-prompt-1")
+	_ = m.appendSessionMessage(first)
+	_ = m.updateSessionMessage(first)
+	time.Sleep(2 * time.Millisecond)
+	finishStreamedStep(t, m, &first, 10_000, 200)
+
+	// A follow-up user message is part of the next request's prompt.
+	followUp := message.Message{
+		ID:        "u-prompt-1",
+		SessionID: "s1",
+		Role:      message.User,
+		Parts:     []message.ContentPart{message.TextContent{Text: strings.Repeat("a", 400)}},
+	}
+	_ = m.appendSessionMessage(followUp)
+
+	second := streamedAssistantMessage("a-prompt-2")
+	_ = m.appendSessionMessage(second)
+	// 10K measured, plus the 200 the response produced, plus 100 for the
+	// 400-character user message.
+	require.Contains(t, common.MetricsStatus(), "↑10.3K")
+
+	// The reported count covers the estimate and closes it out.
+	time.Sleep(2 * time.Millisecond)
+	finishStreamedStep(t, m, &second, 11_000, 300)
+
+	// A tool result lands for the request after it.
+	toolResult := message.Message{
+		ID:        "t-prompt-1",
+		SessionID: "s1",
+		Role:      message.Tool,
+		Parts: []message.ContentPart{message.ToolResult{
+			ToolCallID: "tc1",
+			Name:       "bash",
+			Content:    strings.Repeat("b", 800),
+		}},
+	}
+	_ = m.appendSessionMessage(toolResult)
+
+	third := streamedAssistantMessage("a-prompt-3")
+	_ = m.appendSessionMessage(third)
+	// 11K reported, plus 300 output, plus 200 for the 800-character result.
+	require.Contains(t, common.MetricsStatus(), "↑11.5K")
+}
+
 // TestSidebarReportsNoAveragesWithoutMeasurements pins the "-" state a new
 // session, a reopened session and a model change all start from.
 func TestSidebarReportsNoAveragesWithoutMeasurements(t *testing.T) {

@@ -1853,6 +1853,15 @@ func (m *UI) appendSessionMessage(msg message.Message) tea.Cmd {
 		return nil
 	}
 
+	// A provider sizes a request only once it answers, so the inputs that
+	// land after the last measured one are counted as they arrive. They
+	// turn the last reported prompt into an estimate of the request in
+	// flight, which is what the working indicator shows until the next
+	// reported count replaces it.
+	if msg.Role == message.User || msg.Role == message.Tool {
+		common.AddPendingPromptTokens(common.EstimateInputTokens(msg))
+	}
+
 	switch msg.Role {
 	case message.User:
 		// Shell commands are rendered live via shellResultMsg; skip

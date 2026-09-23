@@ -33,11 +33,13 @@ const minThroughputWindow = time.Millisecond
 // whole step instead and the wait for the output counts.
 const minDecodeWindow = 250 * time.Millisecond
 
-// estimatedTokenChars is how many streamed characters the live estimate counts
-// as one token, matching the fallback the agent uses when a provider reports no
-// usage (internal/agent/usage_fallback.go). It only feeds the working indicator
-// while a response is still streaming, and the reported counts replace it as
-// soon as the request ends.
+// estimatedTokenChars is how many characters the live estimates count as one
+// token, matching the fallback the agent uses when a provider reports no usage
+// (internal/agent/usage_fallback.go). It feeds the working indicator both while
+// a response is streaming, to estimate its output, and while a request is in
+// flight, to estimate its prompt from the inputs that have landed since the
+// last measured one. The reported counts replace it as soon as the request
+// ends.
 const estimatedTokenChars = 4
 
 // stepMetrics holds the generation timings of a single assistant message.
@@ -98,6 +100,13 @@ type metricsTracker struct {
 	lastTPS          float64
 	lastPromptTokens int64
 	lastOutputTokens int64
+
+	// pendingPromptTokens estimates the inputs that landed after the last
+	// measured request: the user messages and tool results the UI appended
+	// since it was sent. A request's own prompt size is reported only when
+	// it ends, so this is what turns the last measured prompt into an
+	// estimate of the request in flight.
+	pendingPromptTokens int64
 
 	// tokenSum and windowSum hold the session's aggregate decode speed:
 	// the output tokens every measured step produced over the total time
@@ -178,8 +187,22 @@ func (t *metricsTracker) resetLocked() {
 	t.lastTPS = 0
 	t.lastPromptTokens = 0
 	t.lastOutputTokens = 0
+	t.pendingPromptTokens = 0
 	t.steps = nil
 	t.order = nil
+}
+
+// AddPendingPromptTokens records the estimated input tokens a message added to
+// the conversation after the last measured request. Providers report a
+// request's prompt size only once it ends, so these estimates stand in for the
+// request in flight and are dropped when the provider reports its own count.
+func AddPendingPromptTokens(tokens int64) {
+	if tokens <= 0 {
+		return
+	}
+	turnTimer.mu.Lock()
+	defer turnTimer.mu.Unlock()
+	turnTimer.pendingPromptTokens += tokens
 }
 
 // StartStep begins timing a new generation step for the assistant message with
@@ -272,6 +295,9 @@ func FinishStep(promptTokens, completionTokens int64) {
 	if promptTokens > 0 {
 		metrics.promptTokens = promptTokens
 		turnTimer.lastPromptTokens = promptTokens
+		// The reported prompt covers everything that landed since the
+		// previous request, so the estimates that stood in for it are done.
+		turnTimer.pendingPromptTokens = 0
 	}
 	if completionTokens > 0 {
 		metrics.tokens = completionTokens
@@ -402,9 +428,12 @@ func tokenCountParts(promptTokens, completionTokens int64) []string {
 
 // livePartsLocked returns the parts of the live generation status of the
 // tracked step. A step that has produced nothing yet reports "-" rather than
-// the numbers of the response before it; those belong to that response. With
-// no step being tracked at all, the last completed step keeps the indicator
-// populated. Callers must hold turnTimer.mu.
+// the numbers of the response before it; those belong to that response. The
+// prompt count is the exception: it describes the request, not the response,
+// and providers size a request only once it ends, so a step in flight is sized
+// from the last measured prompt plus what has landed since. With no step being
+// tracked at all, the last completed step keeps the indicator populated.
+// Callers must hold turnTimer.mu.
 func (t *metricsTracker) livePartsLocked() []string {
 	var parts []string
 	if t.active {
@@ -436,12 +465,16 @@ func (t *metricsTracker) livePartsLocked() []string {
 		tps, hasTPS = 0, false
 	}
 
+	// A request's prompt size is reported when it ends, not while it
+	// streams, so a step in flight is sized from the last measured prompt
+	// plus what has landed since it was sent. The provider's own count
+	// replaces the estimate when it arrives.
 	promptTokens := t.lastPromptTokens
 	switch {
 	case tracked && metrics.promptTokens > 0:
 		promptTokens = metrics.promptTokens
 	case stepStarted:
-		promptTokens = 0
+		promptTokens = t.estimatedPromptLocked()
 	}
 
 	outputTokens := t.lastOutputTokens
@@ -481,6 +514,16 @@ func (t *metricsTracker) liveEstimateLocked() (tokens int64, tps float64, ok boo
 	}
 	tokens = int64((t.streamedChars + estimatedTokenChars - 1) / estimatedTokenChars)
 	return tokens, float64(tokens) / elapsed.Seconds(), true
+}
+
+// estimatedPromptLocked estimates the size of the request in flight: the prompt
+// the provider last sized, plus the output it produced and every input that
+// landed afterwards, all of which the next request carries. The inputs are the
+// UI's own character-based estimates, so the result is approximate and is
+// replaced by the provider's count once the request ends. Callers must hold
+// turnTimer.mu.
+func (t *metricsTracker) estimatedPromptLocked() int64 {
+	return t.lastPromptTokens + t.lastOutputTokens + t.pendingPromptTokens
 }
 
 // decodeWindow returns the window a step's generation speed is measured over:

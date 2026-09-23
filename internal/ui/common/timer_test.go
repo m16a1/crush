@@ -521,24 +521,76 @@ func TestLiveStatusPrefersTheReportedUsage(t *testing.T) {
 	require.NotContains(t, status, "↓100", "the estimate gives way to the reported count")
 }
 
-// TestNewStepShowsNothingUntilItsFirstToken: a fresh response reports its own
-// measurements, not the numbers of the response before it. Until its first
-// token arrives it has none to show.
-func TestNewStepShowsNothingUntilItsFirstToken(t *testing.T) {
+// TestNewStepShowsItsOwnTimingsNotThePreviousResponse: a fresh response
+// reports its own measurements, not the numbers of the response before it.
+// Its prompt has to include what that response produced, though, since the
+// next request carries it, so the prompt count is the one part that builds on
+// the previous step.
+func TestNewStepShowsItsOwnTimingsNotThePreviousResponse(t *testing.T) {
 	resetTracker()
 	t.Cleanup(resetTracker)
 
 	StartTurn()
-	measureStep(t, "m1", 100, 2*time.Millisecond)
-	FinishStep(12_300, 456)
+	measureStepWithPrompt(t, "m1", 12_300, 456, 2*time.Millisecond)
 
 	StartStep("m2")
 	status := MetricsStatus()
 	require.Contains(t, status, "ttft -", "the new response has no time to first token yet")
 	require.Contains(t, status, "- tps", "nor a decode speed")
-	require.Contains(t, status, "↑-")
+	require.Contains(t, status, "↑12.8K", "the measured prompt plus the output that followed it")
 	require.Contains(t, status, "↓-")
-	require.NotContains(t, status, "12.3K", "the previous response's counts are not the new one's")
+	require.NotContains(t, status, "↓456", "the previous response's output count is not the new one's")
+}
+
+// TestLiveStatusEstimatesTheRequestInFlight: the provider sizes a request only
+// when it answers, so the request in flight is estimated from the last measured
+// prompt plus the output it produced and every input that landed since, which
+// is what the new request carries. The reported count replaces the estimate.
+func TestLiveStatusEstimatesTheRequestInFlight(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	measureStepWithPrompt(t, "m1", 1_000, 100, 2*time.Millisecond)
+
+	// A tool result and a follow-up user message land after the measured
+	// request; both are part of the next request's prompt.
+	AddPendingPromptTokens(400)
+	AddPendingPromptTokens(100)
+
+	StartStep("m2")
+	MarkFirstToken()
+	time.Sleep(5 * time.Millisecond)
+	MarkStreamedOutput(400)
+
+	status := MetricsStatus()
+	require.Contains(t, status, "↑1.6K", "1K measured, plus 100 output and 500 pending input")
+	require.Contains(t, status, "↓100", "the output is estimated as it streams")
+
+	// The reported prompt covers everything that was pending, so the
+	// estimate is dropped rather than added to it.
+	MarkStepFinished()
+	FinishStep(12_300, 456)
+	require.Contains(t, MetricsStatus(), "↑12.3K", "the reported count replaces the estimate")
+
+	StartStep("m3")
+	require.Contains(t, MetricsStatus(), "↑12.8K", "the pending input is not counted twice")
+}
+
+// TestPendingPromptTokensAreClearedWithTheSession: the estimate describes the
+// inputs appended to one session, so it goes when the session's metrics do.
+func TestPendingPromptTokensAreClearedWithTheSession(t *testing.T) {
+	resetTracker()
+	t.Cleanup(resetTracker)
+
+	StartTurn()
+	measureStepWithPrompt(t, "m1", 1_000, 100, 2*time.Millisecond)
+	AddPendingPromptTokens(500)
+
+	ResetMetrics()
+
+	StartStep("m2")
+	require.Contains(t, MetricsStatus(), "↑-", "the session's estimate is gone with its metrics")
 }
 
 // TestBufferedStepIsTimedFromTheStartOfTheStep: a slow model can hold its
