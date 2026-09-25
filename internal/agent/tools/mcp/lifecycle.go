@@ -188,7 +188,8 @@ func mcpConfigEqual(a, b config.MCPConfig) bool {
 		a.SkipTLSVerify == b.SkipTLSVerify &&
 		a.TLSCACert == b.TLSCACert &&
 		a.TLSClientCert == b.TLSClientCert &&
-		a.TLSClientKey == b.TLSClientKey
+		a.TLSClientKey == b.TLSClientKey &&
+		a.ChannelEnabled == b.ChannelEnabled
 }
 
 // boolPtrEqual compares two *bool by value, treating two nils as equal.
