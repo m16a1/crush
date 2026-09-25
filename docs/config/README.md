@@ -83,6 +83,43 @@ fi
 Just like `crush.json`, `crushrc` is a trusted file. Guard it carefully and
 don't download random configs without reading them first.
 
+## TLS and private certificates
+
+A provider or MCP server behind a private CA, or one that requires a client
+certificate, is configured with four keys. They apply to that connection only,
+so the rest of Crush keeps full verification.
+
+| Key               | Meaning                                                              |
+| ----------------- | -------------------------------------------------------------------- |
+| `tls_ca_cert`     | PEM file with CA certificates to trust, in addition to system roots   |
+| `tls_client_cert` | PEM client certificate for mutual TLS (set with `tls_client_key`)     |
+| `tls_client_key`  | PEM private key for `tls_client_cert`                                 |
+| `skip_tls_verify` | Turn off certificate verification (insecure, last resort)             |
+
+Certificate paths run through shell expansion, like `api_key` and `base_url`.
+
+```bash
+# A local server with a self-signed certificate.
+provider add local-llm \
+  --type openai-compat \
+  --base-url "https://localhost:8443/v1" \
+  --tls-ca-cert "$HOME/certs/private-ca.pem"
+
+# A server that requires a client certificate.
+provider add mtls-llm \
+  --type openai-compat \
+  --base-url "https://gateway.internal/v1" \
+  --tls-client-cert "$HOME/certs/client.pem" \
+  --tls-client-key "$HOME/certs/client-key.pem"
+
+# An MCP server with a certificate you cannot chain to anything.
+mcp add internal --type http --url "https://mcp.internal.example/mcp" \
+  --skip-tls-verify true
+```
+
+An unreadable certificate, or a client certificate without its key, fails the
+provider rather than being ignored.
+
 ## Where config lives
 
 Crush looks for config in the following places, with lower numbers taking
@@ -159,6 +196,10 @@ Flags:
       --extra-header key value      add an HTTP header (repeatable)
       --extra-body JSON             merge a JSON object into request bodies
       --provider-options JSON       merge a provider-specific JSON object
+      --skip-tls-verify bool        skip TLS certificate verification (insecure)
+      --tls-ca-cert string          PEM file of CA certificates to trust
+      --tls-client-cert string      PEM client certificate for mutual TLS
+      --tls-client-key string       PEM private key for --tls-client-cert
 ```
 
 ```bash
@@ -301,6 +342,10 @@ Flags:
       --oauth-client-id string      pre-registered OAuth client ID
       --oauth-client-secret string  pre-registered OAuth client secret
       --oauth-callback-port int     fixed localhost port for the OAuth callback
+      --skip-tls-verify bool        skip TLS certificate verification (insecure)
+      --tls-ca-cert string          PEM file of CA certificates to trust
+      --tls-client-cert string      PEM client certificate for mutual TLS
+      --tls-client-key string       PEM private key for --tls-client-cert
 ```
 
 ```bash

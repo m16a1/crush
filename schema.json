@@ -295,6 +295,26 @@
             120
           ]
         },
+        "skip_tls_verify": {
+          "type": "boolean",
+          "description": "Skip TLS certificate verification for this MCP server (insecure)",
+          "default": false
+        },
+        "tls_ca_cert": {
+          "type": "string",
+          "description": "Path to a PEM file of CA certificates to trust for this MCP server",
+          "examples": [
+            "/etc/ssl/private-ca.pem"
+          ]
+        },
+        "tls_client_cert": {
+          "type": "string",
+          "description": "Path to a PEM client certificate presented to this MCP server for mutual TLS"
+        },
+        "tls_client_key": {
+          "type": "string",
+          "description": "Path to the PEM private key for tls_client_cert"
+        },
         "sessionless": {
           "type": "boolean",
           "description": "Mark a sessionless MCP server (no Mcp-Session-Id) so Crush skips the subscriptions/listen stream it would otherwise reject. Leave unset to auto-detect known sessionless servers (e.g. GitHub MCP)",
@@ -701,6 +721,26 @@
           "type": "boolean",
           "description": "Auto-discover models from /v1/models endpoint. When true with existing models they are merged (yours win)",
           "default": true
+        },
+        "skip_tls_verify": {
+          "type": "boolean",
+          "description": "Skip TLS certificate verification for this provider (insecure)",
+          "default": false
+        },
+        "tls_ca_cert": {
+          "type": "string",
+          "description": "Path to a PEM file of CA certificates to trust for this provider",
+          "examples": [
+            "/etc/ssl/private-ca.pem"
+          ]
+        },
+        "tls_client_cert": {
+          "type": "string",
+          "description": "Path to a PEM client certificate presented to this provider for mutual TLS"
+        },
+        "tls_client_key": {
+          "type": "string",
+          "description": "Path to the PEM private key for tls_client_cert"
         },
         "models": {
           "items": {

@@ -879,6 +879,59 @@ provider add llamacpp \
   --base-url "http://localhost:2222"
 ```
 
+#### TLS and private certificates
+
+A local or internal server usually serves `https://` with a certificate no
+public CA signed. Crush accepts it in one of three ways, set on the provider and
+on MCP servers the same way:
+
+- `tls_ca_cert` — path to a PEM file with the CA that signed the server's
+  certificate. This is the safe fix, and it also covers a corporate proxy that
+  re-signs traffic.
+- `tls_client_cert` / `tls_client_key` — a PEM client certificate and its
+  private key, presented to a server that requires mutual TLS. Set both.
+- `skip_tls_verify` — turns verification off. Use it only when the certificate
+  cannot be trusted any other way: it removes the only protection against an
+  interceptor.
+
+Certificate paths are expanded through the shell like `api_key` and `base_url`,
+so `$HOME` and `$(cmd)` work.
+
+```bash
+provider add local-llm \
+  --type openai-compat \
+  --base-url "https://localhost:8443/v1" \
+  --tls-ca-cert "$HOME/certs/private-ca.pem" \
+  --tls-client-cert "$HOME/certs/client.pem" \
+  --tls-client-key "$HOME/certs/client-key.pem"
+```
+
+In JSON the same settings are keys on the provider or MCP server:
+
+```json
+{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "local-llm": {
+      "type": "openai-compat",
+      "base_url": "https://localhost:8443/v1",
+      "tls_ca_cert": "$HOME/certs/private-ca.pem"
+    }
+  },
+  "mcp": {
+    "internal": {
+      "type": "http",
+      "url": "https://mcp.internal.example/mcp",
+      "skip_tls_verify": true
+    }
+  }
+}
+```
+
+The settings apply to that provider or server alone, so everything else keeps
+full verification. A certificate that cannot be read, or a client certificate
+without its key, is reported as an error instead of being silently ignored.
+
 #### Manual Model Configuration
 
 You can still list models explicitly. User-defined models always take

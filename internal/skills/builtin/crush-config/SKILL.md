@@ -76,7 +76,14 @@ Flags: `--name`, `--type` (`openai`, `openai-compat`, `anthropic`, or a local
 type like `ollama`, `lmstudio`, `llamacpp`), `--api-key`, `--base-url`,
 `--disable BOOL`, `--flat-rate BOOL`, `--discover-models BOOL`,
 `--system-prompt-prefix TEXT`, `--extra-header KEY VALUE` (repeatable),
-`--extra-body JSON`, `--provider-options JSON`.
+`--extra-body JSON`, `--provider-options JSON`, `--skip-tls-verify BOOL`,
+`--tls-ca-cert PATH`, `--tls-client-cert PATH`, `--tls-client-key PATH`.
+
+For a server whose certificate no public CA signed, reach for `--tls-ca-cert`
+(trust the private CA) or `--tls-client-cert`/`--tls-client-key` together (mutual
+TLS), and only fall back to `--skip-tls-verify` when neither is possible. Paths
+expand through the shell, so `$HOME` works. The same four flags exist on
+`mcp add`.
 
 ```bash
 provider add deepseek \
@@ -119,7 +126,8 @@ Flags: `--command CMD`, `--args ARG` (repeatable), `--env KEY VALUE`
 (repeatable), `--url URL`, `--header KEY VALUE` (repeatable), `--timeout N`,
 `--disabled BOOL`, `--disabled-tools TOOL` (repeatable), `--enabled-tools TOOL`
 (repeatable), `--oauth BOOL`, `--oauth-client-id ID`, `--oauth-client-secret SECRET`,
-`--oauth-callback-port PORT`.
+`--oauth-callback-port PORT`, `--skip-tls-verify BOOL`, `--tls-ca-cert PATH`,
+`--tls-client-cert PATH`, `--tls-client-key PATH`.
 
 ```bash
 mcp add github --type http \
