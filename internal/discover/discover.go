@@ -10,12 +10,29 @@ import (
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
+	"github.com/charmbracelet/crush/internal/tlsconfig"
 )
 
 // httpClient is shared across all discovery and enrichment calls. It
 // has a reasonable timeout so individual requests cannot block forever
 // even if the caller forgets to set a context deadline.
 var httpClient = &http.Client{Timeout: 10 * time.Second}
+
+// clientFor returns the client a provider's requests should use, applying the
+// provider's TLS settings. With none configured it is the shared client, so the
+// common path allocates nothing.
+func clientFor(tlsOpts tlsconfig.Options) (*http.Client, error) {
+	transport, err := tlsOpts.Transport(nil)
+	if err != nil {
+		return nil, err
+	}
+	if transport == nil {
+		return httpClient, nil
+	}
+	c := *httpClient
+	c.Transport = transport
+	return &c, nil
+}
 
 // stripV1Suffix removes a trailing /v1 from a base URL. Enricher
 // endpoints (e.g. Ollama's /api/show, LM Studio's /api/v1/models) are
@@ -31,7 +48,7 @@ func stripV1Suffix(baseURL string) string {
 // shared client. It resolves variable references in the base URL, API
 // key, and extra headers via the provided Resolver. The path is joined
 // to the base URL with proper slash handling.
-func doRequest(ctx context.Context, method, baseURL, path, apiKey string, extraHeaders map[string]string, resolver Resolver, body any) (*http.Response, error) {
+func doRequest(ctx context.Context, method, baseURL, path, apiKey string, extraHeaders map[string]string, resolver Resolver, body any, tlsOpts tlsconfig.Options) (*http.Response, error) {
 	resolvedBase, _ := resolver.ResolveValue(baseURL)
 	resolvedKey, _ := resolver.ResolveValue(apiKey)
 
@@ -71,7 +88,11 @@ func doRequest(ctx context.Context, method, baseURL, path, apiKey string, extraH
 		req.Header.Set(k, resolved)
 	}
 
-	return httpClient.Do(req)
+	client, err := clientFor(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
 }
 
 // Config holds the provider configuration needed for model discovery.
@@ -80,6 +101,9 @@ type Config struct {
 	BaseURL      string
 	APIKey       string
 	ExtraHeaders map[string]string
+	// TLS holds the provider's TLS settings so discovery and enrichment reach a
+	// server whose certificate is private, self-signed, or unverified.
+	TLS tlsconfig.Options
 	// Existing models from config — IDs present in this list are skipped
 	// during discovery (user-specified models win).
 	ExistingModels []catwalk.Model
@@ -105,7 +129,7 @@ type modelsResponse struct {
 // Models whose IDs already appear in cfg.ExistingModels are skipped —
 // user-specified models take precedence.
 func DiscoverModels(ctx context.Context, cfg Config, resolver Resolver) ([]catwalk.Model, error) {
-	resp, err := doRequest(ctx, http.MethodGet, cfg.BaseURL, "/models", cfg.APIKey, cfg.ExtraHeaders, resolver, nil)
+	resp, err := doRequest(ctx, http.MethodGet, cfg.BaseURL, "/models", cfg.APIKey, cfg.ExtraHeaders, resolver, nil, cfg.TLS)
 	if err != nil {
 		return nil, fmt.Errorf("discover models for provider %s: %w", cfg.ID, err)
 	}

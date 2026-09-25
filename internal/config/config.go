@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
+	"github.com/charmbracelet/crush/internal/tlsconfig"
 	"github.com/invopop/jsonschema"
 )
 
@@ -146,6 +147,25 @@ type ProviderConfig struct {
 	// only explicitly listed models are used.
 	AutoDiscoverModels *bool `json:"discover_models,omitempty" jsonschema:"description=Auto-discover models from /v1/models endpoint. When true with existing models they are merged (yours win),default=true"`
 
+	// SkipTLSVerify disables verification of this provider's TLS certificate.
+	// It is meant for a local model server with a self-signed certificate that
+	// cannot be trusted any other way, and it removes the only protection
+	// against an interceptor. Prefer TLSCACert.
+	SkipTLSVerify bool `json:"skip_tls_verify,omitempty" jsonschema:"description=Skip TLS certificate verification for this provider (insecure),default=false"`
+
+	// TLSCACert is a path to a PEM file with certificates to trust in addition
+	// to the system roots. Use it for a provider whose certificate is signed by
+	// a private CA or is self-signed. Values run through shell expansion, so
+	// $VAR and $(cmd) work.
+	TLSCACert string `json:"tls_ca_cert,omitempty" jsonschema:"description=Path to a PEM file of CA certificates to trust for this provider,example=/etc/ssl/private-ca.pem"`
+
+	// TLSClientCert and TLSClientKey are a path to a PEM client certificate and
+	// its private key, presented to the provider for mutual TLS. Both must be
+	// set together. Values run through shell expansion, so $VAR and $(cmd)
+	// work.
+	TLSClientCert string `json:"tls_client_cert,omitempty" jsonschema:"description=Path to a PEM client certificate presented to this provider for mutual TLS"`
+	TLSClientKey  string `json:"tls_client_key,omitempty" jsonschema:"description=Path to the PEM private key for tls_client_cert"`
+
 	// The provider models
 	Models []catwalk.Model `json:"models,omitempty" jsonschema:"description=List of models available from this provider"`
 
@@ -201,6 +221,23 @@ func (c *ProviderConfig) HasAPIKey(resolver VariableResolver) bool {
 	return err == nil && v != ""
 }
 
+// TLS returns the provider's TLS settings with the paths exactly as configured.
+func (c *ProviderConfig) TLS() tlsconfig.Options {
+	return tlsconfig.Options{
+		SkipVerify: c.SkipTLSVerify,
+		CACert:     c.TLSCACert,
+		ClientCert: c.TLSClientCert,
+		ClientKey:  c.TLSClientKey,
+	}
+}
+
+// ResolvedTLS returns the provider's TLS settings with the certificate paths
+// expanded through the given resolver, so $VAR and $(cmd) work as they do for
+// api_key and base_url.
+func (c *ProviderConfig) ResolvedTLS(r VariableResolver) (tlsconfig.Options, error) {
+	return resolveTLSPaths(c.TLS(), r)
+}
+
 type MCPType string
 
 const (
@@ -219,6 +256,14 @@ type MCPConfig struct {
 	DisabledTools []string          `json:"disabled_tools,omitempty" jsonschema:"description=List of tools from this MCP server to disable,example=get-library-doc"`
 	EnabledTools  []string          `json:"enabled_tools,omitempty" jsonschema:"description=Allow list of tools from this MCP server,example=get-library-doc"`
 	Timeout       int               `json:"timeout,omitempty" jsonschema:"description=Timeout in seconds for MCP server connections,default=10,example=30,example=60,example=120"`
+
+	// TLS settings for HTTP and SSE MCP servers, with the same meaning as the
+	// provider fields of the same name. Values run through shell expansion, so
+	// $VAR and $(cmd) work.
+	SkipTLSVerify bool   `json:"skip_tls_verify,omitempty" jsonschema:"description=Skip TLS certificate verification for this MCP server (insecure),default=false"`
+	TLSCACert     string `json:"tls_ca_cert,omitempty" jsonschema:"description=Path to a PEM file of CA certificates to trust for this MCP server,example=/etc/ssl/private-ca.pem"`
+	TLSClientCert string `json:"tls_client_cert,omitempty" jsonschema:"description=Path to a PEM client certificate presented to this MCP server for mutual TLS"`
+	TLSClientKey  string `json:"tls_client_key,omitempty" jsonschema:"description=Path to the PEM private key for tls_client_cert"`
 
 	// Sessionless marks a server that does not maintain an MCP session (it
 	// never issues a Mcp-Session-Id). When true, Crush omits the
@@ -620,6 +665,49 @@ func (m MCPConfig) ResolvedHeaders(r VariableResolver) (map[string]string, error
 		out[k] = v
 	}
 	return out, nil
+}
+
+// TLS returns the MCP server's TLS settings with the paths exactly as
+// configured.
+func (m MCPConfig) TLS() tlsconfig.Options {
+	return tlsconfig.Options{
+		SkipVerify: m.SkipTLSVerify,
+		CACert:     m.TLSCACert,
+		ClientCert: m.TLSClientCert,
+		ClientKey:  m.TLSClientKey,
+	}
+}
+
+// ResolvedTLS returns the MCP server's TLS settings with the certificate paths
+// expanded through the given resolver, so $VAR and $(cmd) work as they do for
+// the other MCP fields.
+func (m MCPConfig) ResolvedTLS(r VariableResolver) (tlsconfig.Options, error) {
+	return resolveTLSPaths(m.TLS(), r)
+}
+
+// resolveTLSPaths expands the certificate paths of opts through r. A path that
+// is not set is left alone: an empty value is what tells the transport to keep
+// that setting off.
+func resolveTLSPaths(opts tlsconfig.Options, r VariableResolver) (tlsconfig.Options, error) {
+	paths := []struct {
+		name  string
+		value *string
+	}{
+		{"tls_ca_cert", &opts.CACert},
+		{"tls_client_cert", &opts.ClientCert},
+		{"tls_client_key", &opts.ClientKey},
+	}
+	for _, p := range paths {
+		if *p.value == "" {
+			continue
+		}
+		v, err := r.ResolveValue(*p.value)
+		if err != nil {
+			return opts, fmt.Errorf("%s: %w", p.name, err)
+		}
+		*p.value = v
+	}
+	return opts, nil
 }
 
 // ResolvedArgs returns l.Args with every element expanded through the
@@ -1140,7 +1228,16 @@ func (c *ProviderConfig) TestConnection(resolver VariableResolver) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	client := &http.Client{}
+	tlsOpts, err := c.ResolvedTLS(resolver)
+	if err != nil {
+		return fmt.Errorf("failed to configure TLS for provider %s: %w", c.ID, err)
+	}
+	transport, err := tlsOpts.Transport(nil)
+	if err != nil {
+		return fmt.Errorf("failed to configure TLS for provider %s: %w", c.ID, err)
+	}
+
+	client := &http.Client{Transport: transport}
 	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request for provider %s: %w", c.ID, err)

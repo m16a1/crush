@@ -1064,6 +1064,17 @@ func unwrapTransport(transport mcp.Transport) mcp.Transport {
 // error.
 // this happens particularly when starting things with npx, e.g. if node can't
 // be found or some other error like that.
+// mcpTLSTransport returns the transport carrying an MCP server's TLS settings,
+// or nil when the server configures none. A nil result leaves the caller on its
+// existing default transport.
+func mcpTLSTransport(m config.MCPConfig, resolver config.VariableResolver) (*http.Transport, error) {
+	tlsOpts, err := m.ResolvedTLS(resolver)
+	if err != nil {
+		return nil, err
+	}
+	return tlsOpts.Transport(nil)
+}
+
 func maybeStdioErr(err error, transport mcp.Transport) error {
 	if !errors.Is(err, io.EOF) {
 		return err
@@ -1169,19 +1180,32 @@ func createTransport(ctx context.Context, cfg *config.ConfigStore, name string, 
 				return nil, nil, fmt.Errorf("failed to create OAuth handler for mcp %q: %w", name, oauthErr)
 			}
 			authURLs.Set(name, oauthHandler)
-			return &mcp.StreamableClientTransport{
+			transport, err := mcpTLSTransport(m, resolver)
+			if err != nil {
+				return nil, nil, fmt.Errorf("mcp %q: %w", name, err)
+			}
+			st := &mcp.StreamableClientTransport{
 				Endpoint:     url,
 				OAuthHandler: oauthHandler,
-			}, oauthHandler, nil
+			}
+			if transport != nil {
+				st.HTTPClient = &http.Client{Transport: transport}
+			}
+			return st, oauthHandler, nil
 		}
 
 		headers, err := m.ResolvedHeaders(resolver)
 		if err != nil {
 			return nil, nil, err
 		}
+		transport, err := mcpTLSTransport(m, resolver)
+		if err != nil {
+			return nil, nil, fmt.Errorf("mcp %q: %w", name, err)
+		}
 		client := &http.Client{
 			Transport: &headerRoundTripper{
 				headers: headers,
+				base:    transport,
 			},
 		}
 		return &mcp.StreamableClientTransport{
@@ -1201,7 +1225,11 @@ func createTransport(ctx context.Context, cfg *config.ConfigStore, name string, 
 			return nil, nil, err
 		}
 
-		var transport http.RoundTripper = &headerRoundTripper{headers: headers}
+		tlsTransport, err := mcpTLSTransport(m, resolver)
+		if err != nil {
+			return nil, nil, fmt.Errorf("mcp %q: %w", name, err)
+		}
+		var transport http.RoundTripper = &headerRoundTripper{headers: headers, base: tlsTransport}
 		var oauthHandler *mcpoauth.Handler
 
 		// SSE transports don't support the SDK's OAuthHandler natively,
@@ -1256,13 +1284,21 @@ func createTransport(ctx context.Context, cfg *config.ConfigStore, name string, 
 
 type headerRoundTripper struct {
 	headers map[string]string
+	// base is the transport the headers ride on, which is where a server's TLS
+	// settings live. It is a concrete type so that "no transport" is a nil
+	// pointer rather than a non-nil interface holding a nil pointer, which
+	// would slip past the check below.
+	base *http.Transport
 }
 
 func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	for k, v := range rt.headers {
 		req.Header.Set(k, v)
 	}
-	return http.DefaultTransport.RoundTrip(req)
+	if rt.base == nil {
+		return http.DefaultTransport.RoundTrip(req)
+	}
+	return rt.base.RoundTrip(req)
 }
 
 // oauthRoundTripper wraps an HTTP transport with OAuth bearer token

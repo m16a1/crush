@@ -43,6 +43,7 @@ import (
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/skills"
+	"github.com/charmbracelet/crush/internal/tlsconfig"
 	"golang.org/x/sync/errgroup"
 
 	"charm.land/fantasy/providers/anthropic"
@@ -1043,17 +1044,31 @@ func (c *coordinator) hyperAPIKey() string {
 }
 
 // providerHTTPClient returns the HTTP client used for provider requests. The
-// debug build logs requests and responses, and every client normalizes provider
-// error bodies so a provider's own error message survives SDK decoding.
-func (c *coordinator) providerHTTPClient() *http.Client {
-	var client *http.Client
-	if c.cfg.Config().Options.Debug {
-		client = log.NewHTTPClient()
+// debug build logs requests and responses, every client normalizes provider
+// error bodies so a provider's own error message survives SDK decoding, and the
+// provider's TLS settings are applied so a private CA, a client certificate or a
+// deliberately unverified certificate is honored.
+func (c *coordinator) providerHTTPClient(tlsOpts tlsconfig.Options) (*http.Client, error) {
+	transport, err := tlsOpts.Transport(nil)
+	if err != nil {
+		return nil, err
 	}
-	return httperror.WithNormalizedErrors(client)
+
+	var client *http.Client
+	switch {
+	case c.cfg.Config().Options.Debug && transport != nil:
+		// The logger stays outermost so it sees the TLS-configured transport.
+		client = log.NewHTTPClient()
+		client.Transport = &log.HTTPRoundTripLogger{Transport: transport}
+	case c.cfg.Config().Options.Debug:
+		client = log.NewHTTPClient()
+	case transport != nil:
+		client = &http.Client{Transport: transport}
+	}
+	return httperror.WithNormalizedErrors(client), nil
 }
 
-func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
+func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map[string]string, providerID string, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	var opts []anthropic.Option
 
 	switch {
@@ -1078,18 +1093,25 @@ func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map
 		opts = append(opts, anthropic.WithBaseURL(baseURL))
 	}
 
-	opts = append(opts, anthropic.WithHTTPClient(c.providerHTTPClient()))
+	httpClient, err := c.providerHTTPClient(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, anthropic.WithHTTPClient(httpClient))
 	return anthropic.New(opts...)
 }
 
-func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[string]string, token *oauth.Token) (fantasy.Provider, error) {
+func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[string]string, token *oauth.Token, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	opts := []openai.Option{
 		openai.WithAPIKey(apiKey),
 		openai.WithUseResponsesAPI(),
 	}
 	// The Codex transport is layered over the debug logger and the error body
 	// normalization, so the backend's own errors are rewritten too.
-	httpClient := c.providerHTTPClient()
+	httpClient, err := c.providerHTTPClient(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
 	if token != nil {
 		// ChatGPT OAuth: requests go through the Codex backend, which
 		// expects account headers and rejects some request fields, so
@@ -1109,29 +1131,37 @@ func (c *coordinator) buildOpenaiProvider(baseURL, apiKey string, headers map[st
 	return openai.New(opts...)
 }
 
-func (c *coordinator) buildOpenrouterProvider(_, apiKey string, headers map[string]string) (fantasy.Provider, error) {
+func (c *coordinator) buildOpenrouterProvider(_, apiKey string, headers map[string]string, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	opts := []openrouter.Option{
 		openrouter.WithAPIKey(apiKey),
 	}
-	opts = append(opts, openrouter.WithHTTPClient(c.providerHTTPClient()))
+	httpClient, err := c.providerHTTPClient(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, openrouter.WithHTTPClient(httpClient))
 	if len(headers) > 0 {
 		opts = append(opts, openrouter.WithHeaders(headers))
 	}
 	return openrouter.New(opts...)
 }
 
-func (c *coordinator) buildVercelProvider(_, apiKey string, headers map[string]string) (fantasy.Provider, error) {
+func (c *coordinator) buildVercelProvider(_, apiKey string, headers map[string]string, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	opts := []vercel.Option{
 		vercel.WithAPIKey(apiKey),
 	}
-	opts = append(opts, vercel.WithHTTPClient(c.providerHTTPClient()))
+	httpClient, err := c.providerHTTPClient(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, vercel.WithHTTPClient(httpClient))
 	if len(headers) > 0 {
 		opts = append(opts, vercel.WithHeaders(headers))
 	}
 	return vercel.New(opts...)
 }
 
-func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers map[string]string, extraBody map[string]any, providerID string, isSubAgent bool) (fantasy.Provider, error) {
+func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers map[string]string, extraBody map[string]any, providerID string, isSubAgent bool, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	opts := []openaicompat.Option{
 		openaicompat.WithBaseURL(baseURL),
 		openaicompat.WithAPIKey(apiKey),
@@ -1148,7 +1178,13 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 				return copilotResponsesModels[modelID]
 			}),
 		)
-		httpClient = copilot.NewClient(isSubAgent, c.cfg.Config().Options.Debug)
+		// Copilot brings its own transport, so the provider's TLS settings
+		// have to be handed to it rather than installed afterwards.
+		base, err := tlsOpts.Transport(nil)
+		if err != nil {
+			return nil, err
+		}
+		httpClient = copilot.NewClient(isSubAgent, c.cfg.Config().Options.Debug, base)
 
 	case string(catwalk.InferenceProviderOpenCodeGo), string(catwalk.InferenceProviderOpenCodeZen):
 		opts = append(
@@ -1168,7 +1204,11 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 		)
 	}
 	if httpClient == nil {
-		httpClient = c.providerHTTPClient()
+		client, err := c.providerHTTPClient(tlsOpts)
+		if err != nil {
+			return nil, err
+		}
+		httpClient = client
 	} else {
 		// Providers that bring their own client (Copilot) still need error
 		// bodies normalized before the SDK decodes them.
@@ -1187,13 +1227,17 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 	return openaicompat.New(opts...)
 }
 
-func (c *coordinator) buildAzureProvider(baseURL, apiKey string, headers map[string]string, options map[string]string) (fantasy.Provider, error) {
+func (c *coordinator) buildAzureProvider(baseURL, apiKey string, headers map[string]string, options map[string]string, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	opts := []azure.Option{
 		azure.WithBaseURL(baseURL),
 		azure.WithAPIKey(apiKey),
 		azure.WithUseResponsesAPI(),
 	}
-	opts = append(opts, azure.WithHTTPClient(c.providerHTTPClient()))
+	httpClient, err := c.providerHTTPClient(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, azure.WithHTTPClient(httpClient))
 	if options == nil {
 		options = make(map[string]string)
 	}
@@ -1207,9 +1251,13 @@ func (c *coordinator) buildAzureProvider(baseURL, apiKey string, headers map[str
 	return azure.New(opts...)
 }
 
-func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
+func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]string, providerID string, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	var opts []bedrock.Option
-	opts = append(opts, bedrock.WithHTTPClient(c.providerHTTPClient()))
+	httpClient, err := c.providerHTTPClient(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, bedrock.WithHTTPClient(httpClient))
 	if len(headers) > 0 {
 		opts = append(opts, bedrock.WithHeaders(headers))
 	}
@@ -1233,21 +1281,29 @@ func (c *coordinator) buildBedrockProvider(apiKey string, headers map[string]str
 	return bedrock.New(opts...)
 }
 
-func (c *coordinator) buildGoogleProvider(baseURL, apiKey string, headers map[string]string) (fantasy.Provider, error) {
+func (c *coordinator) buildGoogleProvider(baseURL, apiKey string, headers map[string]string, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	opts := []google.Option{
 		google.WithBaseURL(baseURL),
 		google.WithGeminiAPIKey(apiKey),
 	}
-	opts = append(opts, google.WithHTTPClient(c.providerHTTPClient()))
+	httpClient, err := c.providerHTTPClient(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, google.WithHTTPClient(httpClient))
 	if len(headers) > 0 {
 		opts = append(opts, google.WithHeaders(headers))
 	}
 	return google.New(opts...)
 }
 
-func (c *coordinator) buildGoogleVertexProvider(headers map[string]string, options map[string]string) (fantasy.Provider, error) {
+func (c *coordinator) buildGoogleVertexProvider(headers map[string]string, options map[string]string, tlsOpts tlsconfig.Options) (fantasy.Provider, error) {
 	opts := []google.Option{}
-	opts = append(opts, google.WithHTTPClient(c.providerHTTPClient()))
+	httpClient, err := c.providerHTTPClient(tlsOpts)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, google.WithHTTPClient(httpClient))
 	if len(headers) > 0 {
 		opts = append(opts, google.WithHeaders(headers))
 	}
@@ -1286,11 +1342,16 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 	apiKey, _ := c.cfg.Resolve(providerCfg.APIKey)
 	baseURL, _ := c.cfg.Resolve(providerCfg.BaseURL)
 
+	tlsOpts, err := providerCfg.ResolvedTLS(c.cfg.Resolver())
+	if err != nil {
+		return nil, err
+	}
+
 	switch providerCfg.ID {
 	case string(catwalk.InferenceProviderOpenCodeGo), string(catwalk.InferenceProviderOpenCodeZen):
 		if isOpenCodeMessagesModel(providerCfg.ID, model.Model) {
 			baseURL = strings.TrimSuffix(baseURL, "/v1")
-			return c.buildAnthropicProvider(baseURL, apiKey, headers, providerCfg.ID)
+			return c.buildAnthropicProvider(baseURL, apiKey, headers, providerCfg.ID, tlsOpts)
 		}
 	}
 
@@ -1307,21 +1368,21 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 				headers["chatgpt-account-id"] = token.AccountID
 			}
 		}
-		return c.buildOpenaiProvider(baseURL, apiKey, headers, token)
+		return c.buildOpenaiProvider(baseURL, apiKey, headers, token, tlsOpts)
 	case anthropic.Name:
-		return c.buildAnthropicProvider(baseURL, apiKey, headers, providerCfg.ID)
+		return c.buildAnthropicProvider(baseURL, apiKey, headers, providerCfg.ID, tlsOpts)
 	case openrouter.Name:
-		return c.buildOpenrouterProvider(baseURL, apiKey, headers)
+		return c.buildOpenrouterProvider(baseURL, apiKey, headers, tlsOpts)
 	case vercel.Name:
-		return c.buildVercelProvider(baseURL, apiKey, headers)
+		return c.buildVercelProvider(baseURL, apiKey, headers, tlsOpts)
 	case azure.Name:
-		return c.buildAzureProvider(baseURL, apiKey, headers, providerCfg.ExtraParams)
+		return c.buildAzureProvider(baseURL, apiKey, headers, providerCfg.ExtraParams, tlsOpts)
 	case bedrock.Name:
-		return c.buildBedrockProvider(apiKey, headers, providerCfg.ID)
+		return c.buildBedrockProvider(apiKey, headers, providerCfg.ID, tlsOpts)
 	case google.Name:
-		return c.buildGoogleProvider(baseURL, apiKey, headers)
+		return c.buildGoogleProvider(baseURL, apiKey, headers, tlsOpts)
 	case "google-vertex":
-		return c.buildGoogleVertexProvider(headers, providerCfg.ExtraParams)
+		return c.buildGoogleVertexProvider(headers, providerCfg.ExtraParams, tlsOpts)
 	case openaicompat.Name, hyper.Name:
 		switch providerCfg.ID {
 		case hyper.Name:
@@ -1333,12 +1394,12 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 			}
 			providerCfg.ExtraBody["tool_stream"] = true
 		}
-		return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent)
+		return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent, tlsOpts)
 	default:
 		// Known custom providers (litellm, llamacpp, lmstudio, ollama,
 		// omlx) are openai-compat under the hood.
 		if discover.IsKnownCustomProvider(string(providerCfg.Type)) {
-			return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent)
+			return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent, tlsOpts)
 		}
 		return nil, fmt.Errorf("provider type not supported: %q", providerCfg.Type)
 	}

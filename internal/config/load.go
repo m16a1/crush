@@ -411,11 +411,17 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 			continue
 		}
 		providerID := cmp.Or(pc.ID, id)
+		tlsOpts, err := pc.ResolvedTLS(resolver)
+		if err != nil {
+			slog.Warn("Skipping model discovery due to invalid TLS config", "provider", providerID, "error", err)
+			continue
+		}
 		cfg := discover.Config{
 			ID:             providerID,
 			BaseURL:        pc.BaseURL,
 			APIKey:         pc.APIKey,
 			ExtraHeaders:   pc.ExtraHeaders,
+			TLS:            tlsOpts,
 			ExistingModels: pc.Models,
 		}
 		providerType := cmp.Or(pc.Type, catwalk.TypeOpenAICompat)
