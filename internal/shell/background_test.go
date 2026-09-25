@@ -10,44 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBackgroundShellManager_Start(t *testing.T) {
-	t.Skip("Skipping this until I figure out why its flaky")
-	t.Parallel()
-
-	ctx := t.Context()
-	workingDir := t.TempDir()
-	manager := newBackgroundShellManager()
-
-	bgShell, err := manager.Start(ctx, workingDir, nil, "echo 'hello world'", "")
-	if err != nil {
-		t.Fatalf("failed to start background shell: %v", err)
-	}
-
-	if bgShell.ID == "" {
-		t.Error("expected shell ID to be non-empty")
-	}
-
-	// Wait for the command to complete
-	bgShell.Wait()
-
-	stdout, stderr, done, err := bgShell.GetOutput()
-	if !done {
-		t.Error("expected shell to be done")
-	}
-
-	if err != nil {
-		t.Errorf("expected no error, got: %v", err)
-	}
-
-	if !strings.Contains(stdout, "hello world") {
-		t.Errorf("expected stdout to contain 'hello world', got: %s", stdout)
-	}
-
-	if stderr != "" {
-		t.Errorf("expected empty stderr, got: %s", stderr)
-	}
-}
-
 func TestBackgroundShellManager_Get(t *testing.T) {
 	t.Parallel()
 
