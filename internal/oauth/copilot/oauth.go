@@ -16,7 +16,9 @@ import (
 
 const (
 	clientID = "Iv1.b507a08c87ecfe98"
+)
 
+var (
 	deviceCodeURL   = "https://github.com/login/device/code"
 	accessTokenURL  = "https://github.com/login/oauth/access_token"
 	copilotTokenURL = "https://api.github.com/copilot_internal/v2/token"

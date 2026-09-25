@@ -54,9 +54,3 @@ INNER JOIN (
 ) latest ON f.path = latest.path AND f.version = latest.max_version AND f.created_at = latest.max_created_at
 WHERE f.session_id = ?
 ORDER BY f.path;
-
--- name: ListNewFiles :many
-SELECT *
-FROM files
-WHERE is_new = 1
-ORDER BY version DESC, created_at DESC;
