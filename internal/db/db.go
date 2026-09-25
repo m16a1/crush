@@ -114,9 +114,6 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.listMessagesBySessionFromSummaryStmt, err = db.PrepareContext(ctx, listMessagesBySessionFromSummary); err != nil {
 		return nil, fmt.Errorf("error preparing query ListMessagesBySessionFromSummary: %w", err)
 	}
-	if q.listNewFilesStmt, err = db.PrepareContext(ctx, listNewFiles); err != nil {
-		return nil, fmt.Errorf("error preparing query ListNewFiles: %w", err)
-	}
 	if q.listSessionReadFilesStmt, err = db.PrepareContext(ctx, listSessionReadFiles); err != nil {
 		return nil, fmt.Errorf("error preparing query ListSessionReadFiles: %w", err)
 	}
@@ -299,11 +296,6 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing listMessagesBySessionFromSummaryStmt: %w", cerr)
 		}
 	}
-	if q.listNewFilesStmt != nil {
-		if cerr := q.listNewFilesStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing listNewFilesStmt: %w", cerr)
-		}
-	}
 	if q.listSessionReadFilesStmt != nil {
 		if cerr := q.listSessionReadFilesStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing listSessionReadFilesStmt: %w", cerr)
@@ -418,7 +410,6 @@ type Queries struct {
 	listLatestSessionFilesStmt           *sql.Stmt
 	listMessagesBySessionStmt            *sql.Stmt
 	listMessagesBySessionFromSummaryStmt *sql.Stmt
-	listNewFilesStmt                     *sql.Stmt
 	listSessionReadFilesStmt             *sql.Stmt
 	listSessionsStmt                     *sql.Stmt
 	listUserMessagesBySessionStmt        *sql.Stmt
@@ -464,7 +455,6 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		listLatestSessionFilesStmt:           q.listLatestSessionFilesStmt,
 		listMessagesBySessionStmt:            q.listMessagesBySessionStmt,
 		listMessagesBySessionFromSummaryStmt: q.listMessagesBySessionFromSummaryStmt,
-		listNewFilesStmt:                     q.listNewFilesStmt,
 		listSessionReadFilesStmt:             q.listSessionReadFilesStmt,
 		listSessionsStmt:                     q.listSessionsStmt,
 		listUserMessagesBySessionStmt:        q.listUserMessagesBySessionStmt,

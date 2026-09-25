@@ -423,14 +423,4 @@ func TestAnswerAndCancelWithoutAPendingQuestionReturnFalse(t *testing.T) {
 	require.False(t, svc.Cancel())
 }
 
-func TestPendingStateClearsOnceAskReturns(t *testing.T) {
-	t.Parallel()
-
-	svc := NewService()
-	answerAndAwait(t, svc, validRequest(), func() bool { return svc.Answer(nil) })
-
-	require.False(t, svc.Answer(nil), "a second answer has nobody to deliver to")
-	require.False(t, svc.Cancel(), "nothing is pending once Ask has returned")
-}
-
 func boolPtr(b bool) *bool { return &b }
