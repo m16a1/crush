@@ -59,7 +59,7 @@ SET channel = ?
 WHERE id = ?
 RETURNING *;
 
--- name: UpdateSessionTitleAndUsage :exec
+-- name: UpdateSessionTitleAndUsage :execrows
 UPDATE sessions
 SET
     title = ?,
@@ -70,7 +70,7 @@ SET
 WHERE id = ?;
 
 
--- name: RenameSession :exec
+-- name: RenameSession :execrows
 UPDATE sessions
 SET
     title = ?

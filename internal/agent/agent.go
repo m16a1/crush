@@ -1965,7 +1965,7 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, req 
 		}
 		fallbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if err := a.sessions.Rename(fallbackCtx, sessionID, titleFromPrompt(userPrompt)); err != nil {
+		if err := a.sessions.Rename(fallbackCtx, sessionID, titleFromPrompt(userPrompt)); err != nil && !errors.Is(err, session.ErrSessionNotFound) {
 			slog.Error("Failed to save fallback session title", "error", err)
 		}
 	}()
@@ -2106,9 +2106,10 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, req 
 	completionTokens := resp.TotalUsage.OutputTokens
 
 	// Atomically update only title and usage fields to avoid overriding other
-	// concurrent session updates.
+	// concurrent session updates. A session deleted mid-run is not an error
+	// here: there is simply nothing left to persist.
 	saveErr := a.sessions.UpdateTitleAndUsage(ctx, sessionID, title, promptTokens, completionTokens, cost)
-	if saveErr != nil {
+	if saveErr != nil && !errors.Is(saveErr, session.ErrSessionNotFound) {
 		return fmt.Errorf("failed to save session title and usage: %w", saveErr)
 	}
 	titleSaved = true

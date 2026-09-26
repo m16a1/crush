@@ -50,14 +50,18 @@ func TestSessionQueries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "s1", last.ID)
 
-	require.NoError(t, q.RenameSession(t.Context(), RenameSessionParams{ID: "s1", Title: "renamed"}))
+	rows, err := q.RenameSession(t.Context(), RenameSessionParams{ID: "s1", Title: "renamed"})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rows)
 	renamed, err := q.GetSessionByID(t.Context(), "s1")
 	require.NoError(t, err)
 	require.Equal(t, "renamed", renamed.Title)
 
-	require.NoError(t, q.UpdateSessionTitleAndUsage(t.Context(), UpdateSessionTitleAndUsageParams{
+	rows, err = q.UpdateSessionTitleAndUsage(t.Context(), UpdateSessionTitleAndUsageParams{
 		ID: "s1", Title: "usage", PromptTokens: 7, CompletionTokens: 8, Cost: 0.5,
-	}))
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rows)
 	updated, err := q.GetSessionByID(t.Context(), "s1")
 	require.NoError(t, err)
 	require.Equal(t, "usage", updated.Title)

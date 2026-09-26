@@ -180,7 +180,7 @@ func (q *Queries) ListSessions(ctx context.Context) ([]Session, error) {
 	return items, nil
 }
 
-const renameSession = `-- name: RenameSession :exec
+const renameSession = `-- name: RenameSession :execrows
 UPDATE sessions
 SET
     title = ?
@@ -192,9 +192,12 @@ type RenameSessionParams struct {
 	ID    string `json:"id"`
 }
 
-func (q *Queries) RenameSession(ctx context.Context, arg RenameSessionParams) error {
-	_, err := q.exec(ctx, q.renameSessionStmt, renameSession, arg.Title, arg.ID)
-	return err
+func (q *Queries) RenameSession(ctx context.Context, arg RenameSessionParams) (int64, error) {
+	result, err := q.exec(ctx, q.renameSessionStmt, renameSession, arg.Title, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setSessionChannel = `-- name: SetSessionChannel :one
@@ -283,7 +286,7 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) (S
 	return i, err
 }
 
-const updateSessionTitleAndUsage = `-- name: UpdateSessionTitleAndUsage :exec
+const updateSessionTitleAndUsage = `-- name: UpdateSessionTitleAndUsage :execrows
 UPDATE sessions
 SET
     title = ?,
@@ -302,13 +305,16 @@ type UpdateSessionTitleAndUsageParams struct {
 	ID               string  `json:"id"`
 }
 
-func (q *Queries) UpdateSessionTitleAndUsage(ctx context.Context, arg UpdateSessionTitleAndUsageParams) error {
-	_, err := q.exec(ctx, q.updateSessionTitleAndUsageStmt, updateSessionTitleAndUsage,
+func (q *Queries) UpdateSessionTitleAndUsage(ctx context.Context, arg UpdateSessionTitleAndUsageParams) (int64, error) {
+	result, err := q.exec(ctx, q.updateSessionTitleAndUsageStmt, updateSessionTitleAndUsage,
 		arg.Title,
 		arg.PromptTokens,
 		arg.CompletionTokens,
 		arg.Cost,
 		arg.ID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
