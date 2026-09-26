@@ -250,7 +250,7 @@ func commitFileChange(edit editContext, sessionID, filePath, oldContent, newCont
 
 	file, err := edit.files.GetByPathAndSession(edit.ctx, filePath, sessionID)
 	if err != nil {
-		_, err = edit.files.Create(edit.ctx, sessionID, filePath, oldContent)
+		file, err = edit.files.Create(edit.ctx, sessionID, filePath, oldContent)
 		if err != nil {
 			return fmt.Errorf("error creating file history: %w", err)
 		}

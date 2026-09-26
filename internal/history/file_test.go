@@ -197,6 +197,79 @@ func TestListLatestSessionFilesPicksTheNewestVersionPerPath(t *testing.T) {
 	require.Equal(t, "b0", byPath["/tmp/b.go"].Content)
 }
 
+func TestListLatestSessionFilesKeepsEverySessionThatSharesAPath(t *testing.T) {
+	t.Parallel()
+
+	env := setupHistory(t)
+	env.createSession(t, "sess-1")
+	env.createSession(t, "sess-2")
+
+	// Both sessions edit the same path, and sess-2 reaches the higher version
+	// numbers. A globally computed max would hide sess-1's row entirely.
+	_, err := env.svc.Create(env.ctx, "sess-1", "/tmp/a.go", "one-0")
+	require.NoError(t, err)
+	_, err = env.svc.CreateVersion(env.ctx, "sess-1", "/tmp/a.go", "one-1")
+	require.NoError(t, err)
+	_, err = env.svc.Create(env.ctx, "sess-2", "/tmp/a.go", "two-0")
+	require.NoError(t, err)
+	_, err = env.svc.CreateVersion(env.ctx, "sess-2", "/tmp/a.go", "two-1")
+	require.NoError(t, err)
+	_, err = env.svc.CreateVersion(env.ctx, "sess-2", "/tmp/a.go", "two-2")
+	require.NoError(t, err)
+
+	for sessionID, want := range map[string]string{
+		"sess-1": "one-1",
+		"sess-2": "two-2",
+	} {
+		files, err := env.svc.ListLatestSessionFiles(env.ctx, sessionID)
+		require.NoError(t, err)
+		require.Len(t, files, 1, "%s must still see its own file", sessionID)
+		require.Equal(t, "/tmp/a.go", files[0].Path)
+		require.Equal(t, want, files[0].Content)
+	}
+}
+
+func TestCreateVersionCounterIsScopedToTheSession(t *testing.T) {
+	t.Parallel()
+
+	env := setupHistory(t)
+	env.createSession(t, "sess-1")
+	env.createSession(t, "sess-2")
+
+	// sess-1 advances the path to version 1.
+	first, err := env.svc.Create(env.ctx, "sess-1", "/tmp/a.go", "one")
+	require.NoError(t, err)
+	require.Equal(t, int64(InitialVersion), first.Version)
+	second, err := env.svc.CreateVersion(env.ctx, "sess-1", "/tmp/a.go", "two")
+	require.NoError(t, err)
+	require.Equal(t, int64(InitialVersion+1), second.Version)
+
+	// sess-2 has no history for the path, so it starts at the initial version
+	// rather than inheriting sess-1's counter.
+	other, err := env.svc.CreateVersion(env.ctx, "sess-2", "/tmp/a.go", "other")
+	require.NoError(t, err)
+	require.Equal(t, "sess-2", other.SessionID)
+	require.Equal(t, int64(InitialVersion), other.Version)
+
+	otherNext, err := env.svc.CreateVersion(env.ctx, "sess-2", "/tmp/a.go", "other-2")
+	require.NoError(t, err)
+	require.Equal(t, int64(InitialVersion+1), otherNext.Version)
+
+	// sess-1's own history is unaffected by sess-2's writes.
+	latest, err := env.svc.GetByPathAndSession(env.ctx, "/tmp/a.go", "sess-1")
+	require.NoError(t, err)
+	require.Equal(t, "two", latest.Content)
+	require.Equal(t, int64(InitialVersion+1), latest.Version)
+
+	// And the rows really are distinct per session.
+	rows, err := env.svc.ListBySession(env.ctx, "sess-2")
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	for _, row := range rows {
+		require.Equal(t, "sess-2", row.SessionID)
+	}
+}
+
 func TestDeleteRemovesTheFileAndPublishes(t *testing.T) {
 	t.Parallel()
 

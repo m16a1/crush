@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -60,25 +61,27 @@ func (s *service) Create(ctx context.Context, sessionID, path, content string) (
 }
 
 // CreateVersion creates a new version of a file with auto-incremented version
-// number. If no previous versions exist for the path, it creates the initial
+// number. If no previous versions exist for the session, it creates the initial
 // version. The provided content is stored as the new version.
+//
+// Version numbers are scoped to the session, matching the uniqueness of the
+// files table: UNIQUE(path, session_id, version). Another session's history for
+// the same path must not influence this session's numbering.
 func (s *service) CreateVersion(ctx context.Context, sessionID, path, content string) (File, error) {
-	// Get the latest version for this path
-	files, err := s.q.ListFilesByPath(ctx, path)
+	// Get the latest version for this path in this session.
+	latest, err := s.q.GetFileByPathAndSession(ctx, db.GetFileByPathAndSessionParams{
+		Path:      path,
+		SessionID: sessionID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		// No previous versions in this session, create initial
+		return s.Create(ctx, sessionID, path, content)
+	}
 	if err != nil {
 		return File{}, err
 	}
 
-	if len(files) == 0 {
-		// No previous versions, create initial
-		return s.Create(ctx, sessionID, path, content)
-	}
-
-	// Get the latest version
-	latestFile := files[0] // Files are ordered by version DESC, created_at DESC
-	nextVersion := latestFile.Version + 1
-
-	return s.createWithVersion(ctx, sessionID, path, content, nextVersion)
+	return s.createWithVersion(ctx, sessionID, path, content, latest.Version+1)
 }
 
 func (s *service) createWithVersion(ctx context.Context, sessionID, path, content string, version int64) (File, error) {
