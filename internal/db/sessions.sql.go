@@ -290,26 +290,20 @@ const updateSessionTitleAndUsage = `-- name: UpdateSessionTitleAndUsage :execrow
 UPDATE sessions
 SET
     title = ?,
-    prompt_tokens = prompt_tokens + ?,
-    completion_tokens = completion_tokens + ?,
     cost = cost + ?,
     updated_at = strftime('%s', 'now')
 WHERE id = ?
 `
 
 type UpdateSessionTitleAndUsageParams struct {
-	Title            string  `json:"title"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	Cost             float64 `json:"cost"`
-	ID               string  `json:"id"`
+	Title string  `json:"title"`
+	Cost  float64 `json:"cost"`
+	ID    string  `json:"id"`
 }
 
 func (q *Queries) UpdateSessionTitleAndUsage(ctx context.Context, arg UpdateSessionTitleAndUsageParams) (int64, error) {
 	result, err := q.exec(ctx, q.updateSessionTitleAndUsageStmt, updateSessionTitleAndUsage,
 		arg.Title,
-		arg.PromptTokens,
-		arg.CompletionTokens,
 		arg.Cost,
 		arg.ID,
 	)

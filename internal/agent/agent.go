@@ -2102,13 +2102,11 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, req 
 		cost = 0
 	}
 
-	promptTokens := contextTokens(resp.TotalUsage)
-	completionTokens := resp.TotalUsage.OutputTokens
-
-	// Atomically update only title and usage fields to avoid overriding other
-	// concurrent session updates. A session deleted mid-run is not an error
-	// here: there is simply nothing left to persist.
-	saveErr := a.sessions.UpdateTitleAndUsage(ctx, sessionID, title, promptTokens, completionTokens, cost)
+	// The title call's tokens are not part of the session's context window, so
+	// only its cost is recorded. The token counters are gauges owned by the
+	// turn path; adding this call's prompt to them would inflate the displayed
+	// context usage.
+	saveErr := a.sessions.UpdateTitleAndUsage(ctx, sessionID, title, cost)
 	if saveErr != nil && !errors.Is(saveErr, session.ErrSessionNotFound) {
 		return fmt.Errorf("failed to save session title and usage: %w", saveErr)
 	}

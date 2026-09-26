@@ -79,7 +79,7 @@ type Service interface {
 	List(ctx context.Context) ([]Session, error)
 	Save(ctx context.Context, session Session) (Session, error)
 	SetChannel(ctx context.Context, sessionID, channel string) (Session, error)
-	UpdateTitleAndUsage(ctx context.Context, sessionID, title string, promptTokens, completionTokens int64, cost float64) error
+	UpdateTitleAndUsage(ctx context.Context, sessionID, title string, cost float64) error
 	Rename(ctx context.Context, id string, title string) error
 	Delete(ctx context.Context, id string) error
 
@@ -249,15 +249,15 @@ func (s *service) SetChannel(ctx context.Context, sessionID, channel string) (Se
 	return session, nil
 }
 
-// UpdateTitleAndUsage updates only the title and usage fields atomically.
-// This is safer than fetching, modifying, and saving the entire session.
-func (s *service) UpdateTitleAndUsage(ctx context.Context, sessionID, title string, promptTokens, completionTokens int64, cost float64) error {
+// UpdateTitleAndUsage sets the title and adds to the session's cost. It does
+// not touch the token counters: those are gauges of the current context window,
+// maintained by the turn path, and an unrelated call's tokens must not be added
+// to them. This is safer than fetching, modifying, and saving the whole session.
+func (s *service) UpdateTitleAndUsage(ctx context.Context, sessionID, title string, cost float64) error {
 	rows, err := s.q.UpdateSessionTitleAndUsage(ctx, db.UpdateSessionTitleAndUsageParams{
-		ID:               sessionID,
-		Title:            title,
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		Cost:             cost,
+		ID:    sessionID,
+		Title: title,
+		Cost:  cost,
 	})
 	if err != nil {
 		return err

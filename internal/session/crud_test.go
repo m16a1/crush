@@ -156,13 +156,14 @@ func TestRenameAndUpdateTitleAndUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "renamed", got.Title)
 
-	require.NoError(t, svc.UpdateTitleAndUsage(t.Context(), s.ID, "titled", 11, 22, 0.5))
+	require.NoError(t, svc.UpdateTitleAndUsage(t.Context(), s.ID, "titled", 0.5))
 	got, err = svc.Get(t.Context(), s.ID)
 	require.NoError(t, err)
 	require.Equal(t, "titled", got.Title)
-	require.Equal(t, int64(11), got.PromptTokens)
-	require.Equal(t, int64(22), got.CompletionTokens)
 	require.InDelta(t, 0.5, got.Cost, 1e-9)
+	// Token counters are context gauges, not something a title write touches.
+	require.Equal(t, int64(0), got.PromptTokens)
+	require.Equal(t, int64(0), got.CompletionTokens)
 }
 
 func TestSetChannelPublishesAnUpdate(t *testing.T) {

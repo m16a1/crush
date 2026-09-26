@@ -19,7 +19,7 @@ func TestUpdateTitleAndUsageUnknownSessionReturnsErrSessionNotFound(t *testing.T
 
 	svc := newTestService(t)
 
-	err := svc.UpdateTitleAndUsage(t.Context(), "00000000-0000-4000-8000-000000000000", "titled", 1, 2, 0.5)
+	err := svc.UpdateTitleAndUsage(t.Context(), "00000000-0000-4000-8000-000000000000", "titled", 0.5)
 	require.ErrorIs(t, err, ErrSessionNotFound)
 }
 
@@ -34,7 +34,7 @@ func TestMutationsOnADeletedSessionReturnErrSessionNotFound(t *testing.T) {
 	// The session existed when the caller resolved it but is gone now; both
 	// mutations must report that rather than silently succeeding.
 	require.ErrorIs(t, svc.Rename(t.Context(), s.ID, "renamed"), ErrSessionNotFound)
-	require.ErrorIs(t, svc.UpdateTitleAndUsage(t.Context(), s.ID, "titled", 1, 2, 0.5), ErrSessionNotFound)
+	require.ErrorIs(t, svc.UpdateTitleAndUsage(t.Context(), s.ID, "titled", 0.5), ErrSessionNotFound)
 }
 
 func TestUnresolvedMutationsPublishNothing(t *testing.T) {
@@ -43,7 +43,7 @@ func TestUnresolvedMutationsPublishNothing(t *testing.T) {
 	sub := svc.Subscribe(t.Context())
 
 	require.ErrorIs(t, svc.Rename(t.Context(), "00000000-0000-4000-8000-000000000000", "x"), ErrSessionNotFound)
-	require.ErrorIs(t, svc.UpdateTitleAndUsage(t.Context(), "00000000-0000-4000-8000-000000000000", "x", 1, 2, 0.5), ErrSessionNotFound)
+	require.ErrorIs(t, svc.UpdateTitleAndUsage(t.Context(), "00000000-0000-4000-8000-000000000000", "x", 0.5), ErrSessionNotFound)
 
 	select {
 	case ev := <-sub:

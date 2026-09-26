@@ -1,6 +1,6 @@
 # Bugs and suspicious behaviour found while adding tests
 
-These were found while raising test coverage. Bugs 1, 2, 3, 4, 5 and 7a have
+These were found while raising test coverage. Bugs 1, 2, 3, 4, 5, 6 and 7a have
 since been fixed and are covered by tests; the rest are open and are deliberately
 *not* covered by tests. Each open one is recorded here instead, so the behaviour
 stays visible without a green test suite quietly encoding it as intended. Each
@@ -512,10 +512,12 @@ layer.
 
 ---
 
-## 6. `UpdateSessionTitleAndUsage` is cumulative, not absolute
+## 6. `UpdateSessionTitleAndUsage` adds to token columns that are gauges
 
-- **Status:** suspected. Needs a caller audit.
-- **Location:** `internal/db/sql/sessions.sql:62-70`
+- **Status:** fixed. Title write no longer touches the token gauges; cost still adds.
+- **Location:**
+  - `internal/db/sql/sessions.sql:62-70`
+  - `internal/agent/agent.go:2107-2110` (the only caller)
 
 ### Evidence
 
@@ -532,17 +534,91 @@ SET
 WHERE id = ?;
 ```
 
-Despite the name, this adds to the existing values rather than setting them.
-That is correct for a delta-based caller and silently double-counts for an
-absolute-value caller. Observed while writing `internal/db/queries_test.go`: a
-session created with 100 prompt tokens and updated with `7` came back at `107`.
+The three usage columns are added to rather than set. That is right for `cost`,
+which is a counter, but wrong for `prompt_tokens` and `completion_tokens`, which
+everywhere else are *gauges* of the current context window:
 
-### Suggested fix
+- `updateSessionTokenCounters` (`internal/agent/agent.go:2221-2229`) **assigns**
+  them from the latest provider call, and is the only writer on the normal turn
+  path.
+- The TUI reads them as a fraction of the context window: `sidebar.go:50` sets
+  `ContextUsed = CompletionTokens + PromptTokens`, and `header.go:149` renders
+  that over `model.ContextWindow` as a percentage.
 
-Audit the callers to confirm every one passes deltas. If any passes a running
-total, either rename the method to make the additive contract explicit
-(e.g. `AddSessionUsage`) or split the title update from the usage update so
-absolute writes are possible.
+So the columns mean "how full is the context right now", not "tokens billed so
+far". Only `cost` is cumulative (`updateSessionUsage`, `agent.go:2203`:
+`session.Cost += cost`).
+
+### The caller
+
+The only caller is `generateTitle` (`internal/agent/agent.go:2105-2112`), which
+passes the title call's own usage:
+
+```go
+promptTokens := contextTokens(resp.TotalUsage)
+completionTokens := resp.TotalUsage.OutputTokens
+...
+a.sessions.UpdateTitleAndUsage(ctx, sessionID, title, promptTokens, completionTokens, cost)
+```
+
+Those are the title request's sizes, not deltas to a running total. For
+`RegenerateTitle` the title prompt *is the whole transcript*
+(`agent.go:1883-1919`), so its input tokens are the same order as the gauge it is
+being added to.
+
+`RegenerateTitle` is reachable: the TUI command `regenerate_title` / `retitle`
+(`ui.go:2249`, `dialog/commands.go:461`) and the server endpoint
+`POST /v1/workspaces/{id}/agent/session/regenerate-title`
+(`server/proto.go:621`). `GenerateTitle` instead runs once, asynchronously, at
+session start (`agent.go:787`).
+
+### Confirmed with a probe
+
+Throwaway probe (deleted afterwards; the repo is clean):
+
+| Step | prompt | completion | context used |
+|---|---|---|---|
+| a turn records the gauge | 100 | 20 | 120 |
+| a retitle adds its call's usage | 195 | 30 | 225 |
+
+The retitle roughly doubles the reported context usage. The initial
+`GenerateTitle` add is silently overwritten by the first turn's assign, so only
+the retitle path is visibly wrong, but either way the write is semantically
+wrong.
+
+### Fix
+
+The additive token terms are gone. `UpdateSessionTitleAndUsage` now only sets the
+title and adds the cost, and the service method takes just that cost:
+
+```sql
+UPDATE sessions
+SET
+    title = ?,
+    cost = cost + ?,
+    updated_at = strftime('%s', 'now')
+WHERE id = ?;
+```
+
+`generateTitle` (`internal/agent/agent.go:2107-2110`) no longer computes or passes
+`promptTokens`/`completionTokens`, so there is no call site left that could feed
+an unrelated prompt into the context gauge. The cost add is kept, because the
+title request is a real charge against the session.
+
+The generated `internal/db/sessions.sql.go` was hand-edited in lockstep with the
+`.sql` (`sqlc` is not installed here); `querier.go` was unaffected because the
+signature stayed `(int64, error)`.
+
+Covered by `TestUpdateTitleAndUsageLeavesTheTokenGaugesAlone` in
+`usage_gauge_test.go` (a turn sets the gauge to 100/20, a retitle then must leave
+it at 100/20 while cost moves), by the updated `TestRenameAndUpdateTitleAndUsage`,
+and by `queries_test.go` which now asserts the token columns are unchanged at the
+db layer.
+
+Because the fix removes arguments, the kept tests cannot compile against the
+pre-fix signature. The pre-fix failure was demonstrated with an equivalent probe
+against `HEAD` (5-argument call, same gauge setup), which failed with
+`prompt gauge: expected 100, actual 195`.
 ---
 
 ## 7. File-history versioning misbehaves on the first touch of a path

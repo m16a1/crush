@@ -58,13 +58,18 @@ func TestSessionQueries(t *testing.T) {
 	require.Equal(t, "renamed", renamed.Title)
 
 	rows, err = q.UpdateSessionTitleAndUsage(t.Context(), UpdateSessionTitleAndUsageParams{
-		ID: "s1", Title: "usage", PromptTokens: 7, CompletionTokens: 8, Cost: 0.5,
+		ID: "s1", Title: "usage", Cost: 0.5,
 	})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rows)
 	updated, err := q.GetSessionByID(t.Context(), "s1")
 	require.NoError(t, err)
 	require.Equal(t, "usage", updated.Title)
+	require.InDelta(t, renamed.Cost+0.5, updated.Cost, 1e-9)
+	// The token counters are context gauges, owned by the turn path; this
+	// write must not move them.
+	require.Equal(t, renamed.PromptTokens, updated.PromptTokens)
+	require.Equal(t, renamed.CompletionTokens, updated.CompletionTokens)
 
 	channelled, err := q.SetSessionChannel(t.Context(), SetSessionChannelParams{
 		ID: "s1", Channel: sql.NullString{String: "slack", Valid: true},
