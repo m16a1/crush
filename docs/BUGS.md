@@ -1,10 +1,10 @@
 # Bugs and suspicious behaviour found while adding tests
 
-These were found while raising test coverage. Bugs 1, 2, 3, 4 and 7a have since
-been fixed and are covered by tests; the rest are open and are deliberately *not*
-covered by tests. Each open one is recorded here instead, so the behaviour stays
-visible without a green test suite quietly encoding it as intended. Each entry
-lists the evidence needed to decide what to do.
+These were found while raising test coverage. Bugs 1, 2, 3, 4, 5 and 7a have
+since been fixed and are covered by tests; the rest are open and are deliberately
+*not* covered by tests. Each open one is recorded here instead, so the behaviour
+stays visible without a green test suite quietly encoding it as intended. Each
+entry lists the evidence needed to decide what to do.
 
 Status legend: **open** (needs a decision), **fixed** (no longer applies),
 **dead code** (no live caller), **suspected** (behaviour may be intentional;
@@ -414,10 +414,10 @@ through, and the list is still capped).
 
 ## 5. Rename / usage updates on a missing session fail silently
 
-- **Status:** open. Minor.
+- **Status:** fixed. Zero rows now maps to `session.ErrSessionNotFound`.
 - **Location:**
-  - `internal/db/sql/sessions.sql:62-70` and `:73-77`
-  - `internal/session/session.go:248-273`, `:290-297`
+  - `internal/db/sql/sessions.sql:62-70` and `:73-77` (now `:execrows`)
+  - `internal/session/session.go:254-297`, `:304-311`
 
 ### Evidence
 
@@ -452,16 +452,63 @@ So a caller renaming a session that no longer exists gets success and no event.
 Observed while writing `internal/session/crud_test.go`: both calls returned
 `nil` for an ID that `Get` had already rejected with `sql.ErrNoRows`.
 
-Note the concurrency angle: the re-fetch in `publishSessionUpdate` is the only
-place the truth is checked, and by design it runs after the write, so a
-session deleted between the update and the re-fetch is indistinguishable from
-one that never existed.
+### Confirmed with probes
 
-### Suggested fix
+Throwaway probes against the current code (deleted afterwards; the repo is
+clean):
 
-Use `:execrows` (or `RETURNING *`) and map zero rows to a not-found error, then
-decide whether callers should treat that as fatal. At minimum, surface it in
-`publishSessionUpdate` rather than only logging.
+| Probe | Call | Observed |
+|---|---|---|
+| A | `Get` on an unknown ID | `sql.ErrNoRows` |
+| A | `Rename` on the same ID | `nil` |
+| A | `UpdateTitleAndUsage` on the same ID | `nil` |
+| B | either mutation, subscribed | no event published |
+| C | `Rename` on a session deleted a moment earlier | `nil` |
+
+### Reachability
+
+All three production callers resolve the session first, so the silent success is
+not hit on an ordinary path:
+
+- `internal/cmd/session.go:340-348` (`crush sessions rename`) resolves via
+  `resolveSessionID`, which rejects an unknown ID before calling `Rename`. The
+  window is a session deleted between the resolve and the update.
+- `internal/agent/agent.go:1968` (fallback title) and `:2110` (usage save) act on
+  a session the agent is already running, which exists by construction.
+
+So the defect is an API-level contract violation plus a discarded error, not a
+reproducible user-facing failure: a caller is told the write succeeded when
+nothing was written, and the one place the truth is checked
+(`publishSessionUpdate`'s re-fetch) logs it and returns. Probe C is exactly that
+gap — a session deleted between resolution and the write is indistinguishable
+from one that never existed, by design, because the re-fetch runs after the
+write.
+
+### Fix
+
+Both statements are now `:execrows`, and `Rename` / `UpdateTitleAndUsage` map a
+zero row count to a new sentinel, `session.ErrSessionNotFound`, returning before
+the re-fetch publish. A successful write still publishes as before.
+
+The caller decision the suggested fix asked for: the agent must **not** treat a
+vanished session as fatal, because a user deleting a session mid-run is a normal
+action and the turn should not fail over it. `internal/agent/agent.go:2110` now
+ignores `ErrSessionNotFound` (returning the turn's usage only for other errors),
+and the fallback title at `:1968` skips logging for it. `crush sessions rename`
+(`internal/cmd/session.go:346`) keeps wrapping it, which is correct there because
+the CLI resolved the session first; hitting it means the session was deleted in
+between and the command should say so.
+
+The generated `internal/db/sessions.sql.go` and `internal/db/querier.go` were
+hand-edited in lockstep with the `.sql`, since `sqlc` is not installed here.
+
+Covered by `not_found_test.go`:
+`TestRenameUnknownSessionReturnsErrSessionNotFound`,
+`TestUpdateTitleAndUsageUnknownSessionReturnsErrSessionNotFound`,
+`TestMutationsOnADeletedSessionReturnErrSessionNotFound` and
+`TestUnresolvedMutationsPublishNothing`. All four were confirmed to fail against
+the pre-fix behaviour, and `queries_test.go` now asserts the row counts at the db
+layer.
 
 ---
 

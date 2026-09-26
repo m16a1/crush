@@ -49,11 +49,11 @@ type Querier interface {
 	// Backs prompt history, which steps back one entry at a time.
 	ListUserMessagesBySession(ctx context.Context, sessionID string) ([]Message, error)
 	RecordFileRead(ctx context.Context, arg RecordFileReadParams) error
-	RenameSession(ctx context.Context, arg RenameSessionParams) error
+	RenameSession(ctx context.Context, arg RenameSessionParams) (int64, error)
 	SetSessionChannel(ctx context.Context, arg SetSessionChannelParams) (Session, error)
 	UpdateMessage(ctx context.Context, arg UpdateMessageParams) error
 	UpdateSession(ctx context.Context, arg UpdateSessionParams) (Session, error)
-	UpdateSessionTitleAndUsage(ctx context.Context, arg UpdateSessionTitleAndUsageParams) error
+	UpdateSessionTitleAndUsage(ctx context.Context, arg UpdateSessionTitleAndUsageParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

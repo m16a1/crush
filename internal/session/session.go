@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,6 +16,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/zeebo/xxh3"
 )
+
+// ErrSessionNotFound is returned by mutations that target a session ID with no
+// matching row. Callers that act on a session they own should tolerate it; the
+// session was deleted underneath them.
+var ErrSessionNotFound = errors.New("session not found")
 
 type TodoStatus string
 
@@ -246,14 +252,18 @@ func (s *service) SetChannel(ctx context.Context, sessionID, channel string) (Se
 // UpdateTitleAndUsage updates only the title and usage fields atomically.
 // This is safer than fetching, modifying, and saving the entire session.
 func (s *service) UpdateTitleAndUsage(ctx context.Context, sessionID, title string, promptTokens, completionTokens int64, cost float64) error {
-	if err := s.q.UpdateSessionTitleAndUsage(ctx, db.UpdateSessionTitleAndUsageParams{
+	rows, err := s.q.UpdateSessionTitleAndUsage(ctx, db.UpdateSessionTitleAndUsageParams{
 		ID:               sessionID,
 		Title:            title,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		Cost:             cost,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
+	}
+	if rows == 0 {
+		return ErrSessionNotFound
 	}
 	s.publishSessionUpdate(ctx, sessionID)
 	return nil
@@ -262,11 +272,15 @@ func (s *service) UpdateTitleAndUsage(ctx context.Context, sessionID, title stri
 // Rename updates only the title of a session without touching updated_at or
 // usage fields.
 func (s *service) Rename(ctx context.Context, id string, title string) error {
-	if err := s.q.RenameSession(ctx, db.RenameSessionParams{
+	rows, err := s.q.RenameSession(ctx, db.RenameSessionParams{
 		ID:    id,
 		Title: title,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
+	}
+	if rows == 0 {
+		return ErrSessionNotFound
 	}
 	s.publishSessionUpdate(ctx, id)
 	return nil
