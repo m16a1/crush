@@ -1,10 +1,10 @@
 # Bugs and suspicious behaviour found while adding tests
 
-These were found while raising test coverage. Bug 1 has since been fixed; the
-rest are open, and none of the remaining ones is covered by a test. Each one is
-recorded here instead so the behaviour stays visible without a green test suite
-quietly encoding it as intended. Each entry lists the evidence needed to decide
-what to do.
+These were found while raising test coverage. Bugs 1, 2 and 7a have since been
+fixed and are covered by tests; the rest are open and are deliberately *not*
+covered by tests. Each open one is recorded here instead, so the behaviour stays
+visible without a green test suite quietly encoding it as intended. Each entry
+lists the evidence needed to decide what to do.
 
 Status legend: **open** (needs a decision), **fixed** (no longer applies),
 **dead code** (no live caller), **suspected** (behaviour may be intentional;
@@ -84,18 +84,23 @@ works end to end and is covered by `TestPreparePreparedStatements` in
 
 ---
 
-## 2. `history.CreateVersion` shares one version counter across sessions
+## 2. `history.CreateVersion` shared one version counter across sessions
 
-- **Status:** suspected.
+- **Status:** confirmed, but **not as originally described**. The version
+  numbering defect was real and is now **fixed**; the claimed write failure never
+  happened. The `ListLatestSessionFiles` row loss found while investigating is
+  fixed too.
 - **Location:**
-  - `internal/history/file.go:65-79` — `CreateVersion`
+  - `internal/history/file.go:66-86` — `CreateVersion`
   - `internal/db/sql/files.sql:19-23` — `ListFilesByPath`
+  - `internal/db/sql/files.sql:47-56` — `ListLatestSessionFiles` (same root
+    cause, worse symptom, but dead code)
   - `internal/db/migrations/20250424200609_initial.sql:33` — the unique constraint
 
 ### Evidence
 
 ```go
-// internal/history/file.go:65
+// internal/history/file.go:66, before the fix
 func (s *service) CreateVersion(ctx context.Context, sessionID, path, content string) (File, error) {
 	files, err := s.q.ListFilesByPath(ctx, path)
 	...
@@ -116,19 +121,80 @@ ORDER BY version DESC, created_at DESC;
 
 There is no `session_id` filter, even though the table's uniqueness is
 per-session: `UNIQUE(path, session_id, version)`. Two sessions that both touch
-`/tmp/a.go` therefore draw from one shared counter: session B's first version
-of the file comes out as whatever session A left off at, not `InitialVersion`.
-Worse, if both sessions target the same path and land on the same computed
-version, the insert collides with the unique constraint.
+`/tmp/a.go` therefore drew from one shared counter: session B's first version of
+the file came out as whatever session A left off at, not `InitialVersion`.
 
-### Suggested fix
+**The claimed UNIQUE collision across sessions does not happen.** `(path, A, 2)`
+and `(path, B, 2)` are different tuples, so both insert cleanly. Measured:
 
-Make the version lookup session-scoped (add a `ListFilesByPathAndSession`
-query, or reuse `GetFileByPathAndSession`), then compute `nextVersion` from
-that. Needs a decision on whether cross-session version numbering is
-deliberate — the constraint suggests it is not.
+```
+A Create        -> version=0
+A CreateVersion -> version=1
+B CreateVersion -> version=2      <- should be InitialVersion (0)
+B owns: version=2
+A owns: version=0, version=1
+```
 
----
+So the bleed was real but *cosmetic*, and nothing consumes the absolute value:
+the only reader of `File.Version` is `internal/ui/model/session.go:138-147`,
+which takes min/max **within the session** to pick the first and last content
+for the diff, and the version number is never rendered
+(`internal/ui/model/session.go:230-258` shows path + `+N/-N` only). Each
+session's own sequence was still strictly increasing, so min/max still picked the
+right pair and the displayed diff was correct.
+
+Two consequences that *were* real:
+
+1. **`ListLatestSessionFiles` dropped rows.** The same global-max pattern, but
+   here the value is joined rather than merely incremented, so it filtered rows
+   away:
+
+   ```sql
+   -- internal/db/sql/files.sql:50, before the fix
+   INNER JOIN (
+       SELECT path, MAX(version) as max_version, ... FROM files GROUP BY path
+   ) latest ON f.path = latest.path AND f.version = latest.max_version ...
+   WHERE f.session_id = ?
+   ```
+
+   The subquery had no session filter, so the global max version won. After the
+   sequence above, `ListLatestSessionFiles("sess-A")` returned **0 rows**
+   although sess-A owned 2 versions, while `("sess-B")` returned 1. A session-wide
+   listing silently lost files. This is dead code today — nothing outside
+   `internal/history/file.go:171` calls it — which is the only reason it was not
+   user-visible.
+2. **Every write read all versions of the path, contents included.** `SELECT *`
+   with no limit and no session scope materialised the full content of every
+   version of that path from every session, to obtain one integer. Cost grew with
+   the project's edit history, not with the session's.
+
+The retry loop in `createWithVersion` (`file.go:113-119`, `maxRetries = 3`) does
+*not* rescue a collision either: it bumps with a blind `version++` and only
+retries 3 times, so 4 concurrent same-session writers for one path leave one
+writer failing with `UNIQUE constraint failed` (measured). That path is
+unreachable in practice, though: `internal/agent/agent.go:660-722` holds a
+per-session dispatch mutex and queues a second prompt rather than running it,
+and tool calls within a turn are sequential, so a session never has two writers
+in flight. Cross-session concurrency is fine because the tuples differ.
+
+### Fix applied
+
+`CreateVersion` now looks the previous version up through the existing
+session-scoped `GetFileByPathAndSession` and treats `sql.ErrNoRows` as "no prior
+version" (`file.go:66-86`), so numbering is per-session, only one row is read,
+and session B starts at `InitialVersion`. `ListLatestSessionFiles` gained the
+missing `WHERE session_id = ?` inside its subquery
+(`internal/db/sql/files.sql:47-56`), and the hand-maintained generated code in
+`internal/db/files.sql.go` was updated to match.
+
+`ListFilesByPath` is now unused by production code. It is left in place: it is
+not broken, it is still covered by `internal/db/queries_test.go`, and it is the
+right query for a future cross-session view. The footgun was the *use* of it for
+session-local numbering, not the query.
+
+Covered by `TestCreateVersionCounterIsScopedToTheSession` and
+`TestListLatestSessionFilesKeepsEverySessionThatSharesAPath`, both confirmed to
+fail against the old code.
 
 ## 3. `question.Answer` / `Cancel` do not clear pending state eagerly
 
@@ -341,3 +407,95 @@ Audit the callers to confirm every one passes deltas. If any passes a running
 total, either rename the method to make the additive contract explicit
 (e.g. `AddSessionUsage`) or split the title update from the usage update so
 absolute writes are possible.
+---
+
+## 7. File-history versioning misbehaves on the first touch of a path
+
+Two candidate defects with one cause: every tool that writes a file hand-rolls
+its own "make sure the path has an initial version" step, and each does it
+differently. Investigation split them, and only the first turned out to be real.
+
+- **Status:** 7a confirmed and **fixed**. 7b checked and **not a bug** as
+  originally written; the residual edge case is left alone.
+- **Location:**
+  - `internal/agent/tools/write.go:143-157`
+  - `internal/agent/tools/edit.go:251-263`
+  - `internal/agent/tools/multiedit.go:222-227`
+  - `internal/history/file.go:65-82` (`CreateVersion`), `:84-135`
+    (`createWithVersion`), `:58-60` (`Create`)
+
+### 7a. `write` / `edit` stored two byte-identical versions on the first write
+
+**Confirmed, fixed.** Both sites looked up the session's history, fell back to
+`Create` when that missed, and then compared against the `File` returned by the
+*failed* lookup:
+
+```go
+// internal/agent/tools/edit.go:251-263, before the fix
+file, err := edit.files.GetByPathAndSession(edit.ctx, filePath, sessionID)
+if err != nil {
+    _, err = edit.files.Create(edit.ctx, sessionID, filePath, oldContent)
+    if err != nil {
+        return fmt.Errorf("error creating file history: %w", err)
+    }
+}
+if file.Content != oldContent {   // <- file is the zero value here
+    // User manually changed the content; store an intermediate version.
+    if _, err := edit.files.CreateVersion(edit.ctx, sessionID, filePath, oldContent); err != nil {
+        slog.Error("Error creating file history version", "error", err)
+    }
+}
+```
+
+`GetByPathAndSession` returns `history.File{}` alongside the error
+(`file.go:145-154`), so `file.Content` was `""`, never the content the guard was
+written to detect. For any non-empty file the "user manually changed the
+content" branch fired on a path the session had never seen and wrote
+`oldContent` a second time. Measured for one edit of a fresh path:
+
+```
+lookup miss leaves file.Content=""
+branch taken: file.Content("") != oldContent("package main\n")
+rows stored for one single edit: 3
+  version=0 identicalOldContent=true  content="package main\n"
+  version=1 identicalOldContent=true  content="package main\n"
+  version=2 identicalOldContent=false content="package main\n\nfunc main() {}\n"
+```
+
+The displayed diff survived this, because `internal/ui/model/session.go:138-149`
+diffs only the min and max versions and both were correct. The cost was a wasted
+row per first edit, and the guard never did the job its comment claimed.
+
+**Fix:** keep the `File` that `Create` returns and let the guard read it, in
+both `write.go` and `edit.go`. `commitFileChange` in `edit.go` is also used by
+`multiedit`'s existing-file path, so that path is fixed too. Covered by
+`internal/agent/tools/history_versioning_test.go`, which asserts exactly one
+stored version per content and was confirmed to fail against the old code.
+
+### 7b. `multiedit` inserting an empty placeholder version — not a bug
+
+**Checked, not a defect.** `processMultiEditWithCreation` does clear the slate
+unconditionally:
+
+```go
+// internal/agent/tools/multiedit.go:221-227
+_, err = edit.files.Create(edit.ctx, sessionID, params.FilePath, "")
+_, err = edit.files.CreateVersion(edit.ctx, sessionID, params.FilePath, currentContent)
+```
+
+It is easy to read that as recording a bogus empty version. It is not: this
+branch only runs when the file does **not** exist on disk — `multiedit` returns
+"file already exists" otherwise (`multiedit.go:156-160`) and edits go through
+`commitFileChange` instead. For a file being created, `""` is the correct
+baseline, and the resulting first-vs-last diff reporting the whole file as added
+matches what the permission prompt already reports
+(`multiedit.go:177` diffs `""` against `currentContent`). No fix needed.
+
+One residual edge case, left as is: if a path was created in a session and then
+deleted, recreating it makes `Create`'s fixed version 0 collide, so the retry in
+`createWithVersion` (`file.go:113-119`) silently lands the empty baseline on a
+higher version and the session's first version for that path stays the old
+deleted content. `Create` therefore does not strictly honour `InitialVersion` in
+that case. It is a contrived scenario, the diff is only mildly wrong, and the
+retry is load-bearing (without it `Create` would fail outright), so it is
+documented rather than changed.

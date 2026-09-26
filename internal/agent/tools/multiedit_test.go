@@ -45,18 +45,34 @@ func (m *mockPermissionService) SubscribeNotifications(ctx context.Context) <-ch
 
 type mockHistoryService struct {
 	*pubsub.Broker[history.File]
+
+	// lookupFile and lookupErr are what GetByPathAndSession returns. The zero
+	// value means "no error, empty content", which is what the pre-existing
+	// tests expect.
+	lookupFile history.File
+	lookupErr  error
+
+	// created and versioned record the content passed to Create and
+	// CreateVersion, in call order.
+	created   []string
+	versioned []string
 }
 
 func (m *mockHistoryService) Create(ctx context.Context, sessionID, path, content string) (history.File, error) {
+	m.created = append(m.created, content)
 	return history.File{Path: path, Content: content}, nil
 }
 
 func (m *mockHistoryService) CreateVersion(ctx context.Context, sessionID, path, content string) (history.File, error) {
+	m.versioned = append(m.versioned, content)
 	return history.File{}, nil
 }
 
 func (m *mockHistoryService) GetByPathAndSession(ctx context.Context, path, sessionID string) (history.File, error) {
-	return history.File{Path: path, Content: ""}, nil
+	if m.lookupErr != nil {
+		return m.lookupFile, m.lookupErr
+	}
+	return m.lookupFile, nil
 }
 
 func (m *mockHistoryService) Get(ctx context.Context, id string) (history.File, error) {

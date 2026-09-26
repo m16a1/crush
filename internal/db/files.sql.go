@@ -202,16 +202,17 @@ const listLatestSessionFiles = `-- name: ListLatestSessionFiles :many
 SELECT f.id, f.session_id, f.path, f.content, f.version, f.created_at, f.updated_at
 FROM files f
 INNER JOIN (
-    SELECT path, MAX(version) as max_version, MAX(created_at) as max_created_at
+    SELECT path, MAX(version) as max_version
     FROM files
+    WHERE session_id = ?
     GROUP BY path
-) latest ON f.path = latest.path AND f.version = latest.max_version AND f.created_at = latest.max_created_at
+) latest ON f.path = latest.path AND f.version = latest.max_version
 WHERE f.session_id = ?
 ORDER BY f.path
 `
 
 func (q *Queries) ListLatestSessionFiles(ctx context.Context, sessionID string) ([]File, error) {
-	rows, err := q.query(ctx, q.listLatestSessionFilesStmt, listLatestSessionFiles, sessionID)
+	rows, err := q.query(ctx, q.listLatestSessionFilesStmt, listLatestSessionFiles, sessionID, sessionID)
 	if err != nil {
 		return nil, err
 	}
