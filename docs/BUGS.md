@@ -1,6 +1,6 @@
 # Bugs and suspicious behaviour found while adding tests
 
-These were found while raising test coverage. Bugs 1, 2 and 7a have since been
+These were found while raising test coverage. Bugs 1, 2, 3 and 7a have since been
 fixed and are covered by tests; the rest are open and are deliberately *not*
 covered by tests. Each open one is recorded here instead, so the behaviour stays
 visible without a green test suite quietly encoding it as intended. Each entry
@@ -198,9 +198,9 @@ fail against the old code.
 
 ## 3. `question.Answer` / `Cancel` do not clear pending state eagerly
 
-- **Status:** open. Latent panic / deadlock.
-- **Location:** `internal/question/question.go:247-259` (`Ask` setup and teardown),
-  `:275-294` (`Answer`), `:298-315` (`Cancel`)
+- **Status:** fixed. `Answer` and `Cancel` now claim the batch under the mutex.
+- **Location:** `internal/question/question.go:223-278` (`Ask` setup and teardown),
+  `:282-307` (`Answer`), `:311-336` (`Cancel`)
 
 ### Evidence
 
@@ -260,14 +260,66 @@ its deferred cleanup:
 - `Answer` followed by `Cancel` → `Cancel` returns `true` and fires a second
   notification even though the question is already resolved.
 
-The TUI is the only caller and serialises these, so this is latent, not
-currently triggered.
+`Ask`'s deferred cleanup is the only thing that nils these fields, and it runs
+*after* the select returns, so between the resolve and the cleanup every caller
+still sees non-nil state.
 
-### Suggested fix
+### Reachability
 
-Resolve pending state inside `Answer`/`Cancel` under the existing mutex
-(nil out `pending`, `cancelled` and `pendingID`), so the second caller sees
-`nil` and returns `false`. `Ask`'s deferred cleanup stays as a backstop.
+The TUI alone cannot double-fire: `QuestionForm.HandleKey` returns `done = true`
+on submit and on cancel, and `UI.Update` nils `activeInline` in that same
+event-loop iteration (`internal/ui/model/ui.go:3182-3184`), so the next key is
+never routed to the form.
+
+But the TUI is **not the only caller**. `crush server`
+(`internal/cmd/server.go`) registers `POST /v1/workspaces/{id}/questions/answer`
+and `.../questions/cancel` (`internal/server/endpoints.go:275-290`), which call
+straight through `internal/backend/question.go:11,34`, and `net/http` runs every
+request on its own goroutine. Two clients — or one client that retries — can hit
+these concurrently. Multiple answering clients are a *designed* scenario: the
+notification broker exists so that "non-answering clients" can dismiss their open
+forms. So this is reachable today, not merely latent.
+
+### Confirmed with probes
+
+Throwaway probes run against the pre-fix code (deleted afterwards; the repo is
+clean):
+
+| Probe | Setup | Observed |
+|---|---|---|
+| A | pending state populated, `Answer` twice | first `true`, second **blocked forever** |
+| B | pending state populated, `Cancel` twice | first `true`, second **panicked: close of closed channel** |
+| C | pending state populated, `Answer` then `Cancel` | `Cancel` returned `true`; **2 notifications** published |
+| D | real pending `Ask` + two concurrent `Cancel` callers | **panic reproduced** on the 22nd iteration |
+
+Probes A-C populate the pending fields directly so the deferred cleanup cannot
+run, which isolates the missing state clearing. Probe D drives the real `Ask` and
+shows the race is reachable rather than an artifact of the setup: the two callers
+interleave between the check and the `close`.
+
+### Fix
+
+`Answer` and `Cancel` now inspect and claim the pending batch under the same
+mutex hold: if a channel is nil they return `false`, otherwise they nil out
+`pending`, `cancelled` and `pendingID` *before* releasing the lock, then do the
+send/close and notification. That makes the check-and-claim atomic, so a second
+caller — sequential or concurrent — sees no pending question and returns `false`.
+
+`Ask` had to change too: it now captures its channels in locals and selects on
+those, not on the struct fields. Clearing the fields in `Answer`/`Cancel` would
+otherwise be able to unset the fields before a racing `Ask` reaches its select,
+leaving it waiting on nil channels. The deferred cleanup stays as a backstop but
+is now guarded by `s.pending == pending`, so a late cleanup cannot clobber a
+newer batch.
+
+Covered by `question_state_test.go`:
+`TestAnswerTwiceResolvesTheBatchOnce`,
+`TestCancelTwiceCancelsTheBatchOnce`,
+`TestCancelAfterAnswerIsANoOp`,
+`TestConcurrentCancelsResolveTheBatchOnce` and
+`TestConcurrentAnswerAndCancelResolveTheBatchOnce`. All five were confirmed to
+fail against the pre-fix code (block, panic, false positive, panic, double
+resolve respectively). The package also passes under `-race`.
 
 ---
 

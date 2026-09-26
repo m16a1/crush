@@ -244,17 +244,24 @@ func (s *questionService) Ask(ctx context.Context, req Request) ([]Answer, error
 		return nil, err
 	}
 
+	pending := make(chan []Answer, 1)
+	cancelled := make(chan struct{})
+
 	s.mu.Lock()
-	s.pending = make(chan []Answer, 1)
-	s.cancelled = make(chan struct{})
+	s.pending = pending
+	s.cancelled = cancelled
 	s.pendingID = req.ID
 	s.mu.Unlock()
 
+	// Clear the state only if it still belongs to this call, so a late
+	// cleanup cannot clobber a newer pending question.
 	defer func() {
 		s.mu.Lock()
-		s.pending = nil
-		s.cancelled = nil
-		s.pendingID = ""
+		if s.pending == pending {
+			s.pending = nil
+			s.cancelled = nil
+			s.pendingID = ""
+		}
 		s.mu.Unlock()
 	}()
 
@@ -263,9 +270,9 @@ func (s *questionService) Ask(ctx context.Context, req Request) ([]Answer, error
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-s.cancelled:
+	case <-cancelled:
 		return nil, ErrCancelled
-	case answers := <-s.pending:
+	case answers := <-pending:
 		return answers, nil
 	}
 }
@@ -276,11 +283,17 @@ func (s *questionService) Answer(answers []Answer) bool {
 	s.mu.Lock()
 	batchID := s.pendingID
 	ch := s.pending
-	s.mu.Unlock()
-
 	if ch == nil {
+		s.mu.Unlock()
 		return false
 	}
+	// Claim the batch before releasing the lock so a concurrent
+	// Answer or Cancel sees no pending question and returns false.
+	s.pending = nil
+	s.cancelled = nil
+	s.pendingID = ""
+	s.mu.Unlock()
+
 	ch <- answers
 
 	// Publish a notification so non-answering clients can dismiss
@@ -299,11 +312,17 @@ func (s *questionService) Cancel() bool {
 	s.mu.Lock()
 	batchID := s.pendingID
 	cancelCh := s.cancelled
-	s.mu.Unlock()
-
 	if cancelCh == nil {
+		s.mu.Unlock()
 		return false
 	}
+	// Claim the batch before releasing the lock so a concurrent
+	// Answer or Cancel sees no pending question and returns false.
+	s.pending = nil
+	s.cancelled = nil
+	s.pendingID = ""
+	s.mu.Unlock()
+
 	close(cancelCh)
 
 	// Publish a notification so non-answering clients can dismiss
