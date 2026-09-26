@@ -1,7 +1,7 @@
 # Bugs and suspicious behaviour found while adding tests
 
-These were found while raising test coverage. Bugs 1, 2, 3 and 7a have since been
-fixed and are covered by tests; the rest are open and are deliberately *not*
+These were found while raising test coverage. Bugs 1, 2, 3, 4 and 7a have since
+been fixed and are covered by tests; the rest are open and are deliberately *not*
 covered by tests. Each open one is recorded here instead, so the behaviour stays
 visible without a green test suite quietly encoding it as intended. Each entry
 lists the evidence needed to decide what to do.
@@ -325,9 +325,9 @@ resolve respectively). The package also passes under `-race`.
 
 ## 4. `getGitStatusSummary` reports "Status: clean" outside a git repo
 
-- **Status:** open. Minor, cosmetic.
-- **Location:** `internal/agent/prompt/prompt.go:271-281`
-  (compare `:259-269` and `:283-290`)
+- **Status:** fixed. The pipe is gone; a git failure now collapses to `""`.
+- **Location:** `internal/agent/prompt/prompt.go:274-291`
+  (compare `:259-269` and `:293-300`)
 
 ### Evidence
 
@@ -359,19 +359,56 @@ out, _, err := sh.Exec(ctx, "git branch --show-current 2>/dev/null")
 
 Observed while writing `internal/agent/prompt/prompt_test.go`: in a non-repo
 temp dir, `getGitBranch` and `getGitRecentCommits` both returned `""`, while
-`getGitStatusSummary` returned `"Status: clean\n"`.
+`getGitStatusSummary` returned `"Status: clean\n"`. That direct call is not how
+the product reaches the function, though: `promptData` gates the whole git block
+on `isGitRepo` (`internal/agent/prompt/prompt.go:207,218`), which only stats for
+a `.git` entry (`:235-238`). A plain non-repo directory never reaches this code.
+
+### Confirmed with probes
+
+Throwaway probes against the current code (deleted afterwards; the repo is
+clean):
+
+| Probe | Setup | Observed |
+|---|---|---|
+| A | plain non-repo dir, direct call | `"Status: clean\n"` |
+| B | dir with a stub `.git` directory | `isGitRepo=true`, branch/commits `""`, prompt `"true\|Status: clean\n"` |
+| C | dir with a `.git` file naming a missing gitdir | prompt `"true\|Status: clean\n"` |
+| D | real repo with an untracked file | `"Status:\n?? untracked.txt\n"` (correct) |
+
+Probes B and C drive the real `promptData` path and show the false "clean"
+reaching the system prompt. D is the control: a genuine status still comes
+through, so the fix must not simply suppress the line.
 
 ### Blast radius
 
-The system prompt for a non-repo project can assert the working tree is clean.
-The same masking applies to a repo where `git status` itself fails.
+The reachable trigger is a directory that *has* a `.git` entry but where git
+refuses to operate on it: a broken worktree or submodule pointer (`.git` is a
+file naming a missing gitdir), a stub or empty `.git`, git's "dubious ownership"
+refusal, or git being removed or the repo deleted mid-run. `isGitRepo` returns
+true, so the git block runs, but every git command fails; the only line that lies
+is the status, which asserts the tree is clean while the branch and
+recent-commits lines correctly collapse to `""`.
 
 ### Suggested fix
 
-Drop the `| head` pipe (truncate in Go instead) and let git's exit status
-propagate, or have the caller only request a status when `isGitRepo` is true —
-which `promptData` already does, so the fallback branch is still reachable if a
-repo is removed mid-run.
+### Fix
+
+The command is now `git status --short 2>/dev/null` with no pipe, so the shell
+reports git's own exit status; a failure returns `""` like the sibling helpers.
+Truncation moved into Go (`gitStatusMaxLines = 20`), which keeps the prompt from
+listing an unbounded number of paths while no longer swallowing the exit code.
+Empty output from a git that ran successfully still yields `"Status: clean\n"`,
+so the two cases stay distinct.
+
+Covered by `git_status_test.go`:
+`TestGetGitStatusSummaryDoesNotReportCleanWhenGitFails`,
+`TestGetGitStatusSummaryDoesNotReportCleanForABrokenWorktreePointer` and
+`TestBuildDoesNotClaimACleanTreeWhenGitCannotRun` were each confirmed to fail
+against the pre-fix code. `TestGetGitStatusSummaryReportsUncommittedChanges` and
+`TestGetGitStatusSummaryTruncatesLongOutput` are guards that pass both before and
+after: they pin the behaviour the fix must not lose (a real status still comes
+through, and the list is still capped).
 
 ---
 
