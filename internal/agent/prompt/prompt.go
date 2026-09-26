@@ -268,8 +268,14 @@ func getGitBranch(ctx context.Context, sh *shell.Shell) (string, error) {
 	return fmt.Sprintf("Current branch: %s\n", out), nil
 }
 
+// gitStatusMaxLines caps how many changed paths the status block lists.
+const gitStatusMaxLines = 20
+
 func getGitStatusSummary(ctx context.Context, sh *shell.Shell) (string, error) {
-	out, _, err := sh.Exec(ctx, "git status --short 2>/dev/null | head -20")
+	// No pipe: the exit status must be git's own, so a failure to run
+	// (bad repo, dubious ownership, git missing) is not mistaken for a
+	// clean tree. Truncation happens here instead of in the command.
+	out, _, err := sh.Exec(ctx, "git status --short 2>/dev/null")
 	if err != nil {
 		return "", nil
 	}
@@ -277,7 +283,11 @@ func getGitStatusSummary(ctx context.Context, sh *shell.Shell) (string, error) {
 	if out == "" {
 		return "Status: clean\n", nil
 	}
-	return fmt.Sprintf("Status:\n%s\n", out), nil
+	lines := strings.Split(out, "\n")
+	if len(lines) > gitStatusMaxLines {
+		lines = lines[:gitStatusMaxLines]
+	}
+	return fmt.Sprintf("Status:\n%s\n", strings.Join(lines, "\n")), nil
 }
 
 func getGitRecentCommits(ctx context.Context, sh *shell.Shell) (string, error) {
