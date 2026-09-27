@@ -385,10 +385,13 @@ func (m *Message) FinishThinking() {
 		if c, ok := part.(ReasoningContent); ok {
 			if c.FinishedAt == 0 {
 				m.Parts[i] = ReasoningContent{
-					Thinking:   c.Thinking,
-					Signature:  c.Signature,
-					StartedAt:  c.StartedAt,
-					FinishedAt: time.Now().Unix(),
+					Thinking:         c.Thinking,
+					Signature:        c.Signature,
+					ThoughtSignature: c.ThoughtSignature,
+					ToolID:           c.ToolID,
+					ResponsesData:    c.ResponsesData,
+					StartedAt:        c.StartedAt,
+					FinishedAt:       time.Now().Unix(),
 				}
 			}
 			return
