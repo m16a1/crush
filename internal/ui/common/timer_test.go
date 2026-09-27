@@ -62,6 +62,20 @@ func averagePrefillOf(t *testing.T) float64 {
 	return value
 }
 
+// firstTokenLatency is how long the steps in these tests take to read their
+// prompt. The tracker reads a first token that arrives in the same clock tick
+// as the step's start as a prefill it never measured, and this hardware's clock
+// ticks about every 40ns, so a step that is meant to have a time to first token
+// has to wait for one.
+const firstTokenLatency = time.Millisecond
+
+// markFirstTokenAfterPrefill records a first token that took real time to
+// arrive, which is what a step that read a prompt before generating looks like.
+func markFirstTokenAfterPrefill() {
+	time.Sleep(firstTokenLatency)
+	MarkFirstToken()
+}
+
 // measureStep times a step the given window long, reporting a prompt size with
 // it so the step joins both of the session's averages.
 func measureStep(t *testing.T, messageID string, tokens int64, window time.Duration) {
@@ -74,7 +88,7 @@ func measureStep(t *testing.T, messageID string, tokens int64, window time.Durat
 func measureStepWithPrompt(t *testing.T, messageID string, promptTokens, tokens int64, window time.Duration) {
 	t.Helper()
 	StartStep(messageID)
-	MarkFirstToken()
+	markFirstTokenAfterPrefill()
 	time.Sleep(window)
 	MarkStepFinished()
 	FinishStep(promptTokens, tokens)
@@ -111,7 +125,7 @@ func TestMetricsStatusKeepsTheElapsedTimeWhenTheTurnEnds(t *testing.T) {
 
 	StartTurn()
 	StartStep("m1")
-	MarkFirstToken()
+	markFirstTokenAfterPrefill()
 	StopTurn()
 
 	require.Regexp(t, `^ttft [0-9]+ms`, MetricsStatus())
@@ -125,7 +139,7 @@ func TestMarkFirstTokenRecordsTimeToFirstToken(t *testing.T) {
 	StartStep("m1")
 	require.Empty(t, MetricsForWidth("m1", 0, 0, 200), "no metrics before the first token")
 
-	MarkFirstToken()
+	markFirstTokenAfterPrefill()
 	metrics := MetricsForWidth("m1", 0, 0, 200)
 	require.Regexp(t, `^ttft [0-9]+(ms|[0-9.]+s)$`, metrics)
 	require.NotContains(t, metrics, "tps", "the decode speed needs the step to finish")
