@@ -18,6 +18,8 @@ const defaultKillTimeout = 2 * time.Second
 func isolateProcess(_ *exec.Cmd) {}
 
 // processGroupExecHandler returns interp.DefaultExecHandler on Windows.
-func processGroupExecHandler(killTimeout time.Duration) interp.ExecHandlerFunc {
+// The onProcessStart callback is unused here because the default handler
+// does not expose the spawned process; PID reporting is Unix-only.
+func processGroupExecHandler(killTimeout time.Duration, _ func(int)) interp.ExecHandlerFunc {
 	return interp.DefaultExecHandler(killTimeout)
 }

@@ -83,7 +83,7 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 		return fmt.Errorf("could not parse command: %w", err)
 	}
 
-	runner, err := newRunner(opts.Cwd, opts.Env, opts.Stdin, stdout, stderr, opts.BlockFuncs)
+	runner, err := newRunner(opts.Cwd, opts.Env, opts.Stdin, stdout, stderr, opts.BlockFuncs, nil)
 	if err != nil {
 		return fmt.Errorf("could not run command: %w", err)
 	}
@@ -182,14 +182,14 @@ func RunAndCapturePTY(ctx context.Context, opts RunOptions) (CaptureResult, erro
 // newRunner constructs an [interp.Runner] configured with the standard
 // Crush handler stack. Shared by the stateless [Run] entrypoint and the
 // stateful [Shell] so the two surfaces cannot drift.
-func newRunner(cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer, blockFuncs []BlockFunc) (*interp.Runner, error) {
+func newRunner(cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer, blockFuncs []BlockFunc, onProcessStart func(int)) (*interp.Runner, error) {
 	env = withNonInteractiveEnv(env)
 	return interp.New(
 		interp.StdIO(stdin, stdout, stderr),
 		interp.Interactive(false),
 		interp.Env(expand.ListEnviron(env...)),
 		interp.Dir(cwd),
-		execHandlerOption(blockFuncs),
+		execHandlerOption(blockFuncs, onProcessStart),
 	)
 }
 
@@ -203,8 +203,8 @@ func newRunner(cwd string, env []string, stdin io.Reader, stdout, stderr io.Writ
 // isolation. Without isolation, shells like zsh that set up job control
 // when sourcing framework files can send SIGINT/SIGTERM to Crush's process
 // group and crash the parent.
-func execHandlerOption(blockFuncs []BlockFunc) interp.RunnerOption {
-	base := processGroupExecHandler(defaultKillTimeout)
+func execHandlerOption(blockFuncs []BlockFunc, onProcessStart func(int)) interp.RunnerOption {
+	base := processGroupExecHandler(defaultKillTimeout, onProcessStart)
 	handler := base
 	for _, mw := range slices.Backward(standardHandlers(blockFuncs)) {
 		handler = mw(handler)

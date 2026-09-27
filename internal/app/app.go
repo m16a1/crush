@@ -676,6 +676,8 @@ func (app *App) setupEvents() {
 	app.subscribe(ctx, "mcp", mcp.SubscribeEvents)
 	app.subscribe(ctx, "mcp-channels", app.subscribeScopedChannelEvents)
 	app.subscribe(ctx, "lsp", SubscribeLSPEvents)
+	app.subscribe(ctx, "jobs", shell.SubscribeJobEvents)
+	app.subscribeJobCompletions(ctx)
 	if app.Skills != nil {
 		app.subscribe(ctx, "skills", app.Skills.SubscribeEvents)
 	}
@@ -775,6 +777,78 @@ func (app *App) subscribeMustDeliver[T any](
 			}
 		}
 	})
+}
+
+// backgroundJobMaxReportChars bounds how much of a finished job's output is
+// fed back to the conversation, matching the bash tool's output limit.
+const backgroundJobMaxReportChars = 30000
+
+// subscribeJobCompletions watches for background jobs finishing and reports
+// the result back to the conversation that started the job, so the agent
+// learns the outcome without polling. Jobs that were never left running in
+// the background are ignored.
+func (app *App) subscribeJobCompletions(ctx context.Context) {
+	app.serviceEventsWG.Go(func() {
+		subCh := shell.SubscribeJobEvents(ctx)
+		for {
+			select {
+			case event, ok := <-subCh:
+				if !ok {
+					return
+				}
+				if event.Payload.Type != shell.JobEventDone {
+					continue
+				}
+				app.reportFinishedJob(event.Payload)
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+}
+
+// reportFinishedJob delivers a finished job's output to its session as a
+// prompt, waking the agent if it is idle or queueing behind an in-flight
+// turn otherwise. It is a no-op for jobs that were not deliberately
+// backgrounded.
+func (app *App) reportFinishedJob(ev shell.JobEvent) {
+	if ev.SessionID == "" || app.AgentCoordinator == nil {
+		return
+	}
+	bg, ok := shell.GetBackgroundShellManager().Get(ev.ShellID)
+	if ok && !bg.NotifyOnDone() {
+		return
+	}
+
+	var output string
+	if ok {
+		stdout, stderr, _, _ := bg.GetOutput()
+		output = strings.TrimSpace(strings.Join([]string{stdout, stderr}, "\n"))
+	}
+	if len(output) > backgroundJobMaxReportChars {
+		output = output[:backgroundJobMaxReportChars] + "\n… (output truncated)"
+	}
+	if output == "" {
+		output = "(no output)"
+	}
+
+	command := ev.Command
+	if command == "" && ok {
+		command = bg.Command
+	}
+	prompt := fmt.Sprintf(
+		"A background job you started has finished.\n\nCommand: %s\nExit code: %d\n\nOutput:\n%s",
+		command, ev.ExitCode, output,
+	)
+
+	// Run blocks for the whole turn: do it off the event goroutine so the
+	// completion stream keeps flowing. The coordinator queues the prompt
+	// behind any in-flight turn.
+	go func() {
+		if _, err := app.AgentCoordinator.Run(app.globalCtx, ev.SessionID, prompt); err != nil {
+			slog.Debug("Reporting finished background job failed", "error", err, "shell_id", ev.ShellID)
+		}
+	}()
 }
 
 func (app *App) InitCoderAgent(ctx context.Context) error {

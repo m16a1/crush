@@ -30,6 +30,7 @@ Common shell builtins and core utils available on Windows.
 - Set run_in_background=true to run commands in a separate background shell
 - Returns a shell ID for managing the background process
 - Use job_output tool to view current output from background shell
+- To wait for a background command, call job_output with wait=true (optionally timeout_ms) instead of running a separate `sleep` command and polling; a fixed sleep is unreliable and wastes a call
 - Use job_kill tool to terminate a background shell
 - IMPORTANT: NEVER use `&` at the end of commands to run in background - use run_in_background parameter instead
 - Commands that should run in background:

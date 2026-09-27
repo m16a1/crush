@@ -932,6 +932,32 @@ func (m *Chat) MessageItem(id string) chat.MessageItem {
 	return item
 }
 
+// UpdateJobOutput applies a background-job event to the chat item that tracks
+// the job, appending streamed output and/or recording the terminal state.
+// Items that do not track the job are left untouched.
+func (m *Chat) UpdateJobOutput(shellID, chunk string, done bool, exitCode int) {
+	if shellID == "" {
+		return
+	}
+	for i := range m.list.Len() {
+		item, ok := m.list.ItemAt(i).(chat.MessageItem)
+		if !ok {
+			continue
+		}
+		updater, ok := item.(chat.JobLiveUpdater)
+		if !ok || updater.JobShellID() != shellID {
+			continue
+		}
+		if chunk != "" {
+			updater.AppendJobOutput(chunk)
+		}
+		if done {
+			updater.SetJobDone(exitCode)
+		}
+		chat.ClearItemCaches([]chat.MessageItem{item})
+	}
+}
+
 // ToggleExpandedSelectedItem expands the selected message item if it is expandable.
 func (m *Chat) ToggleExpandedSelectedItem() {
 	if expandable, ok := m.list.SelectedItem().(chat.Expandable); ok {

@@ -46,6 +46,7 @@ type BashResponseMetadata struct {
 	WorkingDirectory string `json:"working_directory"`
 	Background       bool   `json:"background,omitempty"`
 	ShellID          string `json:"shell_id,omitempty"`
+	PID              int    `json:"pid,omitempty"`
 }
 
 const (
@@ -252,7 +253,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				bgManager := shell.GetBackgroundShellManager()
 				bgManager.Cleanup()
 				// Use background context so it continues after tool returns
-				bgShell, err := bgManager.Start(context.Background(), execWorkingDir, blockFuncs(), params.Command, params.Description)
+				bgShell, err := bgManager.StartSession(context.Background(), execWorkingDir, blockFuncs(), params.Command, params.Description, sessionID)
 				if err != nil {
 					return fantasy.ToolResponse{}, fmt.Errorf("error starting background shell: %w", err)
 				}
@@ -289,6 +290,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				}
 
 				// Still running after fast-failure check - return as background job
+				bgShell.SetNotifyOnDone(true)
 				metadata := BashResponseMetadata{
 					StartTime:        startTime.UnixMilli(),
 					EndTime:          time.Now().UnixMilli(),
@@ -296,8 +298,9 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 					WorkingDirectory: bgShell.WorkingDir,
 					Background:       true,
 					ShellID:          bgShell.ID,
+					PID:              bgShell.PID(),
 				}
-				response := fmt.Sprintf("Background shell started with ID: %s\n\nUse job_output tool to view output or job_kill to terminate.", bgShell.ID)
+				response := fmt.Sprintf("Background shell started with ID: %s\n\nUse job_output tool to view output (wait=true to block for completion) or job_kill to terminate.", bgShell.ID)
 				return fantasy.WithResponseMetadata(fantasy.NewTextResponse(response), metadata), nil
 			}
 
@@ -307,7 +310,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			// Start with detached context so it can survive if moved to background
 			bgManager := shell.GetBackgroundShellManager()
 			bgManager.Cleanup()
-			bgShell, err := bgManager.Start(context.Background(), execWorkingDir, blockFuncs(), params.Command, params.Description)
+			bgShell, err := bgManager.StartSession(context.Background(), execWorkingDir, blockFuncs(), params.Command, params.Description, sessionID)
 			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error starting shell: %w", err)
 			}
@@ -373,6 +376,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			}
 
 			// Still running - keep as background job
+			bgShell.SetNotifyOnDone(true)
 			metadata := BashResponseMetadata{
 				StartTime:        startTime.UnixMilli(),
 				EndTime:          time.Now().UnixMilli(),
@@ -381,7 +385,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				Background:       true,
 				ShellID:          bgShell.ID,
 			}
-			response := fmt.Sprintf("Command is taking longer than expected and has been moved to background.\n\nBackground shell ID: %s\n\nUse job_output tool to view output or job_kill to terminate.", bgShell.ID)
+			response := fmt.Sprintf("Command is taking longer than expected and has been moved to background.\n\nBackground shell ID: %s\n\nUse job_output tool to view output (wait=true to block for completion) or job_kill to terminate.", bgShell.ID)
 			return fantasy.WithResponseMetadata(fantasy.NewTextResponse(response), metadata), nil
 		},
 	)

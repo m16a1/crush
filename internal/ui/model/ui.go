@@ -46,6 +46,7 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/ui/attachments"
@@ -1066,6 +1067,15 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.renderPills()
 	case pubsub.Event[history.File]:
 		cmds = append(cmds, m.handleFileEvent(msg.Payload))
+	case pubsub.Event[shell.JobEvent]:
+		if m.chat != nil {
+			m.chat.UpdateJobOutput(
+				msg.Payload.ShellID,
+				msg.Payload.Chunk,
+				msg.Payload.Type == shell.JobEventDone,
+				msg.Payload.ExitCode,
+			)
+		}
 	case pubsub.Event[app.LSPEvent]:
 		// Refresh the memoized LSP state off-thread: LSPGetStates is a
 		// synchronous HTTP round-trip in client/server mode and diagnostics

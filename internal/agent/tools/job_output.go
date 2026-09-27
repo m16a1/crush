@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/shell"
@@ -18,8 +19,9 @@ const (
 var jobOutputDescription string
 
 type JobOutputParams struct {
-	ShellID string `json:"shell_id" description:"The ID of the background shell to retrieve output from"`
-	Wait    bool   `json:"wait" description:"If true, block until the background shell completes before returning output"`
+	ShellID   string `json:"shell_id" description:"The ID of the background shell to retrieve output from"`
+	Wait      bool   `json:"wait" description:"If true, block until the background shell completes before returning output"`
+	TimeoutMs int    `json:"timeout_ms,omitempty" description:"When wait is true, return the current output after this many milliseconds even if the shell is still running. Use this to wait for a long-running command to reach a ready state without spinning."`
 }
 
 type JobOutputResponseMetadata struct {
@@ -27,6 +29,8 @@ type JobOutputResponseMetadata struct {
 	Command          string `json:"command"`
 	Description      string `json:"description"`
 	Done             bool   `json:"done"`
+	ExitCode         int    `json:"exit_code,omitempty"`
+	PID              int    `json:"pid,omitempty"`
 	WorkingDirectory string `json:"working_directory"`
 }
 
@@ -46,7 +50,17 @@ func NewJobOutputTool(spillDir string) fantasy.AgentTool {
 			}
 
 			if params.Wait {
-				bgShell.WaitContext(ctx)
+				if params.TimeoutMs > 0 {
+					// Bounded wait: block until the shell finishes or the
+					// timeout elapses, whichever comes first. This is the
+					// supported alternative to sleeping and polling, and it
+					// works for long-running commands that never exit.
+					waitCtx, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutMs)*time.Millisecond)
+					defer cancel()
+					bgShell.WaitContext(waitCtx)
+				} else {
+					bgShell.WaitContext(ctx)
+				}
 			}
 
 			stdout, stderr, done, err := bgShell.GetOutput()
@@ -78,6 +92,8 @@ func NewJobOutputTool(spillDir string) fantasy.AgentTool {
 				Command:          bgShell.Command,
 				Description:      bgShell.Description,
 				Done:             done,
+				ExitCode:         shell.ExitCode(err),
+				PID:              bgShell.PID(),
 				WorkingDirectory: bgShell.WorkingDir,
 			}
 

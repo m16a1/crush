@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
+	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/stretchr/testify/require"
 )
@@ -278,3 +279,50 @@ func TestMessageToProtoPrismModel(t *testing.T) {
 }
 
 func ptrFloat(v float64) *float64 { return &v }
+
+// TestJobEventToProto_RoundTrip verifies that a background job event
+// survives the SSE envelope conversion with its type, ids, output chunk and
+// exit code intact, so a remote TUI can render live job output and close the
+// job out on completion.
+func TestJobEventToProto_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	src := pubsub.Event[shell.JobEvent]{
+		Type: pubsub.UpdatedEvent,
+		Payload: shell.JobEvent{
+			Type:        shell.JobEventOutput,
+			ShellID:     "00A",
+			SessionID:   "sess-1",
+			PID:         5142,
+			Command:     "npm run dev",
+			Description: "dev server",
+			Chunk:       "listening\n",
+		},
+	}
+
+	env := wrapEvent(src)
+	require.NotNil(t, env)
+	require.Equal(t, pubsub.PayloadTypeJobEvent, env.Type)
+
+	var decoded pubsub.Event[proto.JobEvent]
+	require.NoError(t, json.Unmarshal(env.Payload, &decoded))
+	require.Equal(t, shell.JobEventOutput, decoded.Payload.Type)
+	require.Equal(t, "00A", decoded.Payload.ShellID)
+	require.Equal(t, "sess-1", decoded.Payload.SessionID)
+	require.Equal(t, 5142, decoded.Payload.PID)
+	require.Equal(t, "listening\n", decoded.Payload.Chunk)
+
+	done := wrapEvent(pubsub.Event[shell.JobEvent]{
+		Type: pubsub.UpdatedEvent,
+		Payload: shell.JobEvent{
+			Type:     shell.JobEventDone,
+			ShellID:  "00A",
+			ExitCode: 3,
+		},
+	})
+	require.NotNil(t, done)
+	var decodedDone pubsub.Event[proto.JobEvent]
+	require.NoError(t, json.Unmarshal(done.Payload, &decodedDone))
+	require.Equal(t, shell.JobEventDone, decodedDone.Payload.Type)
+	require.Equal(t, 3, decodedDone.Payload.ExitCode)
+}

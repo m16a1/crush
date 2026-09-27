@@ -62,8 +62,8 @@ func (b *BashToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *
 
 	if meta.Background {
 		description := cmp.Or(meta.Description, params.Command)
-		content := "Command: " + params.Command + "\n" + opts.Result.Content
-		return renderJobTool(sty, opts, cappedWidth, "Start", meta.ShellID, description, content)
+		content := jobCommandBody(params.Command) + opts.Result.Content
+		return renderJobTool(sty, opts, cappedWidth, "Start", meta.PID, "running", description, content)
 	}
 
 	// Regular bash command. The command is always rendered expanded
@@ -145,19 +145,21 @@ func (j *JobOutputToolRenderContext) RenderTool(sty *styles.Styles, width int, o
 		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
 	}
 
-	var description string
+	var meta tools.JobOutputResponseMetadata
 	if opts.HasResult() && opts.Result.Metadata != "" {
-		var meta tools.JobOutputResponseMetadata
-		if err := json.Unmarshal([]byte(opts.Result.Metadata), &meta); err == nil {
-			description = cmp.Or(meta.Description, meta.Command)
-		}
+		_ = json.Unmarshal([]byte(opts.Result.Metadata), &meta)
+	}
+	description := cmp.Or(meta.Description, meta.Command)
+	state := jobState(meta.Done, meta.ExitCode)
+	if opts.HasResult() && opts.Result.IsError {
+		state = "error"
 	}
 
-	content := ""
+	content := jobCommandBody(meta.Command)
 	if opts.HasResult() {
-		content = opts.Result.Content
+		content += opts.Result.Content
 	}
-	return renderJobTool(sty, opts, cappedWidth, "Output", params.ShellID, description, content)
+	return renderJobTool(sty, opts, cappedWidth, "Output", meta.PID, state, description, content)
 }
 
 // -----------------------------------------------------------------------------
@@ -196,25 +198,54 @@ func (j *JobKillToolRenderContext) RenderTool(sty *styles.Styles, width int, opt
 		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
 	}
 
-	var description string
+	var meta tools.JobKillResponseMetadata
 	if opts.HasResult() && opts.Result.Metadata != "" {
-		var meta tools.JobKillResponseMetadata
-		if err := json.Unmarshal([]byte(opts.Result.Metadata), &meta); err == nil {
-			description = cmp.Or(meta.Description, meta.Command)
-		}
+		_ = json.Unmarshal([]byte(opts.Result.Metadata), &meta)
+	}
+	description := cmp.Or(meta.Description, meta.Command)
+	state := "killed"
+	if opts.HasResult() && opts.Result.IsError {
+		state = "error"
 	}
 
-	content := ""
+	content := jobCommandBody(meta.Command)
 	if opts.HasResult() {
-		content = opts.Result.Content
+		content += opts.Result.Content
 	}
-	return renderJobTool(sty, opts, cappedWidth, "Kill", params.ShellID, description, content)
+	return renderJobTool(sty, opts, cappedWidth, "Kill", meta.PID, state, description, content)
+}
+
+// jobCommandBody renders the leading "Command: ..." line that keeps the
+// exact command visible for every job tool. It is empty when the command
+// is unknown, so callers can simply concatenate it with the output body.
+func jobCommandBody(command string) string {
+	if command == "" {
+		return ""
+	}
+	return "Command: " + command + "\n"
+}
+
+// jobState describes a job's lifecycle state in one word for the header.
+// Running jobs never carry a meaningful exit code.
+func jobState(done bool, exitCode int) string {
+	if !done {
+		return "running"
+	}
+	if exitCode != 0 {
+		return fmt.Sprintf("exit %d", exitCode)
+	}
+	return "done"
 }
 
 // renderJobTool renders a job-related tool with the common pattern:
 // header → nested check → early state → body.
-func renderJobTool(sty *styles.Styles, opts *ToolRenderOpts, width int, action, shellID, description, content string) string {
-	header := jobHeader(sty, opts.Status, action, shellID, description, width)
+func renderJobTool(sty *styles.Styles, opts *ToolRenderOpts, width int, action string, pid int, state, description, content string) string {
+	// Once the job's terminal event has arrived it is authoritative for
+	// the state, even when the original result predated it.
+	if opts.JobDone {
+		state = jobState(true, opts.JobExitCode)
+	}
+	header := jobHeader(sty, opts.Status, action, pid, state, description, width)
 	if opts.Compact {
 		return header
 	}
@@ -223,6 +254,9 @@ func renderJobTool(sty *styles.Styles, opts *ToolRenderOpts, width int, action, 
 		return joinToolParts(header, earlyState)
 	}
 
+	// Live output streamed in after the tool result is appended to the
+	// body so a running job shows progress.
+	content += opts.LiveJobOutput
 	if content == "" {
 		return header
 	}
@@ -233,14 +267,22 @@ func renderJobTool(sty *styles.Styles, opts *ToolRenderOpts, width int, action, 
 }
 
 // jobHeader builds a header for job-related tools.
-// Format: "● Job (Action) PID shellID description..."
-func jobHeader(sty *styles.Styles, status ToolStatus, action, shellID, description string, width int) string {
+// Format: "● Job (Action) PID pid state description..."
+// The PID is only shown for external processes; commands made up entirely
+// of interpreter builtins have no OS process, so no identifier is shown.
+func jobHeader(sty *styles.Styles, status ToolStatus, action string, pid int, state, description string, width int) string {
 	icon := toolIcon(sty, status)
 	jobPart := sty.Tool.JobToolName.Render("Job")
 	actionPart := sty.Tool.JobAction.Render("(" + action + ")")
-	pidPart := sty.Tool.JobPID.Render("PID " + shellID)
 
-	prefix := fmt.Sprintf("%s %s %s %s", icon, jobPart, actionPart, pidPart)
+	parts := []string{icon, jobPart, actionPart}
+	if pid > 0 {
+		parts = append(parts, sty.Tool.JobPID.Render(fmt.Sprintf("PID %d", pid)))
+	}
+	if state != "" {
+		parts = append(parts, sty.Tool.JobAction.Render(state))
+	}
+	prefix := strings.Join(parts, " ")
 
 	if description == "" {
 		return prefix

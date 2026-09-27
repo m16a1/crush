@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/charmbracelet/x/exp/slice"
 	"mvdan.cc/sh/v3/interp"
@@ -68,6 +69,12 @@ type Shell struct {
 	mu         sync.Mutex
 	logger     Logger
 	blockFuncs []BlockFunc
+	// lastPID is the OS process ID of the most recently spawned child
+	// process, or 0 when no external process has been started (e.g. a
+	// command made up entirely of interpreter builtins). On Windows it
+	// always stays 0 because the default exec handler does not expose
+	// the spawned process.
+	lastPID atomic.Int64
 }
 
 // Options for creating a new shell
@@ -241,7 +248,21 @@ func splitArgsFlags(parts []string) (args []string, flags []string) {
 // newInterp creates a new interpreter with the current shell state. A nil
 // stdin is equivalent to an empty input stream.
 func (s *Shell) newInterp(stdin io.Reader, stdout, stderr io.Writer) (*interp.Runner, error) {
-	return newRunner(s.cwd, s.env, stdin, stdout, stderr, s.blockFuncs)
+	return newRunner(s.cwd, s.env, stdin, stdout, stderr, s.blockFuncs, s.recordProcess)
+}
+
+// recordProcess remembers the OS PID of a spawned child so callers can
+// surface a real process ID to the user. It is only ever called from the
+// exec handler, which runs at most once per spawned process.
+func (s *Shell) recordProcess(pid int) {
+	s.lastPID.Store(int64(pid))
+}
+
+// ProcessID returns the OS PID of the most recently spawned child process,
+// or 0 if no external process has been started (all-builtin command, or a
+// platform whose exec handler does not report it).
+func (s *Shell) ProcessID() int {
+	return int(s.lastPID.Load())
 }
 
 // updateShellFromRunner updates the shell from the interpreter after execution.

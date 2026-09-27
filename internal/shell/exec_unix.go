@@ -38,10 +38,13 @@ func isolateProcess(cmd *exec.Cmd) {
 // framework files will attempt to take over the TTY, causing SIGTTIN/SIGTTOU
 // signals and corrupting the parent terminal state.
 //
-// The implementation mirrors interp.DefaultExecHandler with two additions:
-// isolateProcess(&cmd) after construction, and negative-PID signal targeting
-// in the cancellation callback so the entire child process group is killed.
-func processGroupExecHandler(killTimeout time.Duration) interp.ExecHandlerFunc {
+// The implementation mirrors interp.DefaultExecHandler with three additions:
+// isolateProcess(&cmd) after construction, negative-PID signal targeting
+// in the cancellation callback so the entire child process group is killed,
+// and an onProcessStart callback so callers can surface the real OS PID of
+// the process a command spawned. onProcessStart may be nil; it is invoked
+// once per spawned process, so a pipeline reports the last command started.
+func processGroupExecHandler(killTimeout time.Duration, onProcessStart func(int)) interp.ExecHandlerFunc {
 	return func(ctx context.Context, args []string) error {
 		hc := interp.HandlerCtx(ctx)
 		path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
@@ -63,6 +66,9 @@ func processGroupExecHandler(killTimeout time.Duration) interp.ExecHandlerFunc {
 
 		err = cmd.Start()
 		if err == nil {
+			if onProcessStart != nil {
+				onProcessStart(cmd.Process.Pid)
+			}
 			stopf := context.AfterFunc(ctx, func() {
 				if killTimeout <= 0 {
 					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

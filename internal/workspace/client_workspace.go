@@ -28,6 +28,7 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/version"
 	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
@@ -1234,6 +1235,20 @@ func (w *ClientWorkspace) translateEvent(ev any) tea.Msg {
 			CurrentVersion: e.Payload.CurrentVersion,
 			LatestVersion:  e.Payload.LatestVersion,
 			IsDevelopment:  e.Payload.IsDevelopment,
+		}
+	case pubsub.Event[proto.JobEvent]:
+		return pubsub.Event[shell.JobEvent]{
+			Type: e.Type,
+			Payload: shell.JobEvent{
+				Type:        e.Payload.Type,
+				ShellID:     e.Payload.ShellID,
+				SessionID:   e.Payload.SessionID,
+				PID:         e.Payload.PID,
+				Command:     e.Payload.Command,
+				Description: e.Payload.Description,
+				Chunk:       e.Payload.Chunk,
+				ExitCode:    e.Payload.ExitCode,
+			},
 		}
 	default:
 		slog.Warn("Unknown event type in translateEvent", "type", fmt.Sprintf("%T", ev))

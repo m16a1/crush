@@ -23,18 +23,38 @@ const (
 type syncBuffer struct {
 	buf bytes.Buffer
 	mu  sync.RWMutex
+	// onWrite, when set, is called with each written chunk after the
+	// buffer is updated. It is used to forward a running job's output to
+	// the live event stream.
+	onWrite func(string)
+}
+
+func (sb *syncBuffer) setOnWrite(fn func(string)) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.onWrite = fn
 }
 
 func (sb *syncBuffer) Write(p []byte) (n int, err error) {
 	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	return sb.buf.Write(p)
+	n, err = sb.buf.Write(p)
+	onWrite := sb.onWrite
+	sb.mu.Unlock()
+	if onWrite != nil && n > 0 {
+		onWrite(string(p[:n]))
+	}
+	return n, err
 }
 
 func (sb *syncBuffer) WriteString(s string) (n int, err error) {
 	sb.mu.Lock()
-	defer sb.mu.Unlock()
-	return sb.buf.WriteString(s)
+	n, err = sb.buf.WriteString(s)
+	onWrite := sb.onWrite
+	sb.mu.Unlock()
+	if onWrite != nil && n > 0 {
+		onWrite(s[:n])
+	}
+	return n, err
 }
 
 func (sb *syncBuffer) String() string {
@@ -50,6 +70,7 @@ type BackgroundShell struct {
 	Description string
 	Shell       *Shell
 	WorkingDir  string
+	SessionID   string
 	ctx         context.Context
 	cancel      context.CancelFunc
 	stdout      *syncBuffer
@@ -57,6 +78,11 @@ type BackgroundShell struct {
 	done        chan struct{}
 	exitErr     error
 	completedAt atomic.Int64 // Unix timestamp when job completed (0 if still running)
+	// notifyOnDone is set once a job has been deliberately left running in
+	// the background (as opposed to a synchronous command that happened to
+	// finish). Only such jobs are reported back to their conversation when
+	// they end.
+	notifyOnDone atomic.Bool
 }
 
 // BackgroundShellManager manages background shell instances.
@@ -87,6 +113,13 @@ func GetBackgroundShellManager() *BackgroundShellManager {
 
 // Start creates and starts a new background shell with the given command.
 func (m *BackgroundShellManager) Start(ctx context.Context, workingDir string, blockFuncs []BlockFunc, command string, description string) (*BackgroundShell, error) {
+	return m.StartSession(ctx, workingDir, blockFuncs, command, description, "")
+}
+
+// StartSession is Start plus the owning session ID. The session is carried
+// on the job's terminal event so a finished job can be reported back to the
+// conversation that started it.
+func (m *BackgroundShellManager) StartSession(ctx context.Context, workingDir string, blockFuncs []BlockFunc, command string, description, sessionID string) (*BackgroundShell, error) {
 	// Check job limit
 	if m.shells.Len() >= MaxBackgroundJobs {
 		return nil, fmt.Errorf("maximum number of background jobs (%d) reached. Please terminate or wait for some jobs to complete", MaxBackgroundJobs)
@@ -106,6 +139,7 @@ func (m *BackgroundShellManager) Start(ctx context.Context, workingDir string, b
 		Command:     command,
 		Description: description,
 		WorkingDir:  workingDir,
+		SessionID:   sessionID,
 		Shell:       shell,
 		ctx:         shellCtx,
 		cancel:      cancel,
@@ -114,15 +148,44 @@ func (m *BackgroundShellManager) Start(ctx context.Context, workingDir string, b
 		done:        make(chan struct{}),
 	}
 
+	coalescer := newJobOutputCoalescer(jobOutputFlushInterval, func(chunk string) {
+		publishJobEvent(JobEvent{
+			Type:        JobEventOutput,
+			ShellID:     id,
+			SessionID:   sessionID,
+			PID:         shell.ProcessID(),
+			Command:     command,
+			Description: description,
+			Chunk:       chunk,
+		})
+	})
+	bgShell.stdout.setOnWrite(coalescer.write)
+	bgShell.stderr.setOnWrite(coalescer.write)
+	go coalescer.run()
+
 	m.shells.Set(id, bgShell)
 
 	go func() {
 		defer close(bgShell.done)
+		defer coalescer.close()
 
 		err := shell.ExecStream(shellCtx, command, bgShell.stdout, bgShell.stderr)
 
 		bgShell.exitErr = err
 		bgShell.completedAt.Store(time.Now().Unix())
+
+		// Flush any trailing output before announcing completion, so the
+		// terminal event is always last on the stream.
+		coalescer.close()
+		publishJobEvent(JobEvent{
+			Type:        JobEventDone,
+			ShellID:     id,
+			SessionID:   sessionID,
+			PID:         shell.ProcessID(),
+			Command:     command,
+			Description: description,
+			ExitCode:    ExitCode(err),
+		})
 	}()
 
 	return bgShell, nil
@@ -208,6 +271,27 @@ func (m *BackgroundShellManager) KillAll(ctx context.Context) {
 		})
 	}
 	wg.Wait()
+}
+
+// PID returns the OS process ID of the job's most recently spawned child
+// process, or 0 when none has been spawned yet (or the platform does not
+// report it). It is safe to call while the job runs.
+func (bs *BackgroundShell) PID() int {
+	return bs.Shell.ProcessID()
+}
+
+// SetNotifyOnDone marks the job as one that should be reported back to its
+// session when it finishes. It is set by callers that leave a command
+// running in the background, and deliberately not set for synchronous
+// commands that merely happened to finish.
+func (bs *BackgroundShell) SetNotifyOnDone(notify bool) {
+	bs.notifyOnDone.Store(notify)
+}
+
+// NotifyOnDone reports whether the job should be reported back to its
+// session on completion.
+func (bs *BackgroundShell) NotifyOnDone() bool {
+	return bs.notifyOnDone.Load()
 }
 
 // GetOutput returns the current output of a background shell.

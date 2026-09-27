@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
+	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/stretchr/testify/require"
 )
@@ -998,4 +999,34 @@ func TestClientWorkspace_RecoveryCreateIsBounded(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("recoverWorkspace blocked on an unresponsive server")
 	}
+}
+
+// TestTranslateEvent_JobEvent verifies the client reconstructs a background
+// job event from the wire so the TUI can stream live job output and close the
+// job out on completion in client/server mode.
+func TestTranslateEvent_JobEvent(t *testing.T) {
+	t.Parallel()
+
+	w := NewClientWorkspace(nil, proto.Workspace{})
+	ev := pubsub.Event[proto.JobEvent]{
+		Type: pubsub.UpdatedEvent,
+		Payload: proto.JobEvent{
+			Type:        "output",
+			ShellID:     "00A",
+			SessionID:   "sess-1",
+			PID:         5142,
+			Command:     "npm run dev",
+			Description: "dev server",
+			Chunk:       "listening\n",
+		},
+	}
+
+	out := w.translateEvent(ev)
+	got, ok := out.(pubsub.Event[shell.JobEvent])
+	require.True(t, ok, "expected pubsub.Event[shell.JobEvent], got %T", out)
+	require.Equal(t, shell.JobEventOutput, got.Payload.Type)
+	require.Equal(t, "00A", got.Payload.ShellID)
+	require.Equal(t, "sess-1", got.Payload.SessionID)
+	require.Equal(t, 5142, got.Payload.PID)
+	require.Equal(t, "listening\n", got.Payload.Chunk)
 }

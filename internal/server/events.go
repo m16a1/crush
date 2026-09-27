@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 )
 
@@ -162,6 +163,20 @@ func wrapEvent(ev any) *pubsub.Payload {
 		return envelope(pubsub.PayloadTypeSkillsEvent, pubsub.Event[proto.SkillsEvent]{
 			Type:    e.Type,
 			Payload: skillsEventToProto(e.Payload),
+		})
+	case pubsub.Event[shell.JobEvent]:
+		return envelope(pubsub.PayloadTypeJobEvent, pubsub.Event[proto.JobEvent]{
+			Type: e.Type,
+			Payload: proto.JobEvent{
+				Type:        e.Payload.Type,
+				ShellID:     e.Payload.ShellID,
+				SessionID:   e.Payload.SessionID,
+				PID:         e.Payload.PID,
+				Command:     e.Payload.Command,
+				Description: e.Payload.Description,
+				Chunk:       e.Payload.Chunk,
+				ExitCode:    e.Payload.ExitCode,
+			},
 		})
 	default:
 		slog.Warn("Unrecognized event type for SSE wrapping", "type", fmt.Sprintf("%T", ev))

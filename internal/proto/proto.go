@@ -84,6 +84,22 @@ type RunComplete struct {
 	Cancelled bool   `json:"cancelled,omitempty"`
 }
 
+// JobEvent reports the lifecycle of a background shell job over the wire.
+// Output events carry a coalesced chunk; the terminal event (Type ==
+// "done") carries the exit code and an empty chunk. This mirrors
+// shell.JobEvent so the TUI can render a running job's output live when it
+// is attached to a remote server.
+type JobEvent struct {
+	Type        string `json:"type"`
+	ShellID     string `json:"shell_id"`
+	SessionID   string `json:"session_id,omitempty"`
+	PID         int    `json:"pid,omitempty"`
+	Command     string `json:"command,omitempty"`
+	Description string `json:"description,omitempty"`
+	Chunk       string `json:"chunk,omitempty"`
+	ExitCode    int    `json:"exit_code,omitempty"`
+}
+
 // SkillInfo describes a visible skill exposed to a frontend.
 type SkillInfo struct {
 	ID            string `json:"id"`

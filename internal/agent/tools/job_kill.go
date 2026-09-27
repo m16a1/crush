@@ -24,6 +24,7 @@ type JobKillResponseMetadata struct {
 	ShellID     string `json:"shell_id"`
 	Command     string `json:"command"`
 	Description string `json:"description"`
+	PID         int    `json:"pid,omitempty"`
 }
 
 func NewJobKillTool() fantasy.AgentTool {
@@ -46,6 +47,7 @@ func NewJobKillTool() fantasy.AgentTool {
 				ShellID:     params.ShellID,
 				Command:     bgShell.Command,
 				Description: bgShell.Description,
+				PID:         bgShell.PID(),
 			}
 
 			err := bgManager.Kill(params.ShellID)

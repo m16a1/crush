@@ -108,6 +108,12 @@ type ToolRenderOpts struct {
 	Compact         bool
 	IsSpinning      bool
 	Status          ToolStatus
+	// LiveJobOutput is background-job output that arrived after the tool
+	// result was produced. JobDone and JobExitCode carry the job's
+	// terminal state from the same stream.
+	LiveJobOutput string
+	JobDone       bool
+	JobExitCode   int
 }
 
 // IsPending returns true if the tool call is still pending (not finished and
@@ -168,6 +174,12 @@ type baseToolMessageItem struct {
 	sty             *styles.Styles
 	anim            *anim.Anim
 	expandedContent bool
+	// liveJobOutput accumulates background-job output streamed in after
+	// the tool result was produced; jobDone/jobExitCode carry the job's
+	// terminal state. They are only used by the job renderers.
+	liveJobOutput string
+	jobDone       bool
+	jobExitCode   int
 }
 
 var _ Expandable = (*baseToolMessageItem)(nil)
@@ -310,6 +322,61 @@ func (t *baseToolMessageItem) ID() string {
 	return t.toolCall.ID
 }
 
+// JobLiveUpdater is implemented by tool items that render the live output of
+// a background job they started.
+type JobLiveUpdater interface {
+	MessageItem
+	// JobShellID returns the background shell id this item tracks, or "".
+	JobShellID() string
+	// AppendJobOutput appends streamed job output.
+	AppendJobOutput(chunk string)
+	// SetJobDone records the job's terminal exit code.
+	SetJobDone(exitCode int)
+}
+
+var _ JobLiveUpdater = (*baseToolMessageItem)(nil)
+
+// JobShellID returns the background shell id carried in this tool's result
+// metadata, or "" when the tool has no associated job. Only the item that
+// started the job (the background bash call) reports an id, so streamed
+// output lands in exactly one place rather than in every tool that happens
+// to reference the same shell.
+func (t *baseToolMessageItem) JobShellID() string {
+	if t.toolCall.Name != tools.BashToolName || t.result == nil || t.result.Metadata == "" {
+		return ""
+	}
+	var meta struct {
+		ShellID    string `json:"shell_id"`
+		Background bool   `json:"background"`
+	}
+	if err := json.Unmarshal([]byte(t.result.Metadata), &meta); err != nil {
+		return ""
+	}
+	if !meta.Background {
+		return ""
+	}
+	return meta.ShellID
+}
+
+// AppendJobOutput appends streamed background-job output and invalidates the
+// item's render cache so the next draw shows it.
+func (t *baseToolMessageItem) AppendJobOutput(chunk string) {
+	if chunk == "" {
+		return
+	}
+	t.liveJobOutput += chunk
+	t.clearCache()
+	t.Bump()
+}
+
+// SetJobDone records that the background job has finished.
+func (t *baseToolMessageItem) SetJobDone(exitCode int) {
+	t.jobDone = true
+	t.jobExitCode = exitCode
+	t.clearCache()
+	t.Bump()
+}
+
 // Spinning implements [Animatable].
 func (t *baseToolMessageItem) Spinning() bool {
 	return t.isSpinning()
@@ -348,6 +415,9 @@ func (t *baseToolMessageItem) RawRender(width int) string {
 			Compact:         t.isCompact,
 			IsSpinning:      t.isSpinning(),
 			Status:          t.computeStatus(),
+			LiveJobOutput:   t.liveJobOutput,
+			JobDone:         t.jobDone,
+			JobExitCode:     t.jobExitCode,
 		})
 
 		// Prepend hook indicator if hooks ran for this tool call.
