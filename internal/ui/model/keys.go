@@ -77,16 +77,16 @@ type KeyMap struct {
 	}
 
 	// Global key maps
-	Quit         key.Binding
-	Help         key.Binding
-	Commands     key.Binding
-	Models       key.Binding
-	Suspend      key.Binding
-	Sessions     key.Binding
-	Tab          key.Binding
-	ToggleYolo   key.Binding
-	ShiftTab     key.Binding
-	ResendPrompt key.Binding
+	Quit        key.Binding
+	Help        key.Binding
+	Commands    key.Binding
+	Models      key.Binding
+	Suspend     key.Binding
+	Sessions    key.Binding
+	Tab         key.Binding
+	ToggleYolo  key.Binding
+	ShiftTab    key.Binding
+	RetryPrompt key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -127,9 +127,9 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("shift+tab"),
 			key.WithHelp("shift+tab", "mode"),
 		),
-		ResendPrompt: key.NewBinding(
+		RetryPrompt: key.NewBinding(
 			key.WithKeys("ctrl+r"),
-			key.WithHelp("ctrl+r", "resend prompt"),
+			key.WithHelp("ctrl+r", "retry prompt"),
 		),
 	}
 

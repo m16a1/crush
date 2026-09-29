@@ -116,6 +116,23 @@ func TestSendMessageIncludesChannelOrigin(t *testing.T) {
 	require.Equal(t, "signal", got.Channel)
 }
 
+func TestRetryMessageSendsRetryFlag(t *testing.T) {
+	t.Parallel()
+
+	var got proto.AgentMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	c := captureClient(t, srv)
+	require.NoError(t, c.RetryMessage(context.Background(), "ws1", "sess1"))
+	require.True(t, got.Retry)
+	require.Equal(t, "sess1", got.SessionID)
+	require.Empty(t, got.Prompt)
+}
+
 func TestSendMessageAcceptsStatusOK(t *testing.T) {
 	t.Parallel()
 

@@ -29,7 +29,8 @@ and merge regularly; everything below is **in addition to** upstream.
   from the command palette
 - **Regenerate session title:** generate a new session title from the command
   palette, using the real token budget and the full conversation
-- **Resend last prompt:** press `ctrl+r` to resend the previous prompt
+- **Retry last prompt:** press `ctrl+r` to repeat the previous prompt and
+  regenerate the answer without retyping it or duplicating the message
 - **Generation metrics:** live generation speed shown while a response streams,
   per-step tool-call metrics, weighted average generation speed, and average
   prefill speed instead of average time-to-first-token

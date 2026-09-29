@@ -241,6 +241,10 @@ func (w *ClientWorkspace) AgentRun(ctx context.Context, sessionID, prompt string
 	return w.client.SendMessage(ctx, w.workspaceID(), sessionID, "", "", prompt, attachments...)
 }
 
+func (w *ClientWorkspace) AgentRetry(ctx context.Context, sessionID string) error {
+	return w.client.RetryMessage(ctx, w.workspaceID(), sessionID)
+}
+
 func (w *ClientWorkspace) AgentRunChannel(ctx context.Context, channel, sessionID, prompt string, attachments ...message.Attachment) error {
 	return w.client.SendMessage(ctx, w.workspaceID(), sessionID, "", channel, prompt, attachments...)
 }

@@ -388,6 +388,7 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 			SessionID:         sessionID,
 			RunID:             runID,
 			Channel:           channel,
+			Retry:             RetryRequested(ctx),
 			Prompt:            prompt,
 			HiddenUserMessage: message.HiddenUserMessage(ctx),
 			Attachments:       attachments,

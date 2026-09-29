@@ -146,6 +146,10 @@ type Workspace interface {
 
 	// Agent
 	AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error
+	// AgentRetry re-runs the session's most recent prompt against the
+	// existing history, discarding the previous attempt's output so the
+	// answer is regenerated without duplicating the user message.
+	AgentRetry(ctx context.Context, sessionID string) error
 	AgentRunChannel(ctx context.Context, channel, sessionID, prompt string, attachments ...message.Attachment) error
 	AgentRunShellCommand(ctx context.Context, sessionID, command string, termWidth int, onProgress func(string), isFirstMessage bool) (proto.ShellCommandResponse, error)
 	AgentCancel(sessionID string)

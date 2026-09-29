@@ -113,6 +113,27 @@ func TestSendMessage_EmptyPrompt(t *testing.T) {
 	require.ErrorIs(t, err, agent.ErrEmptyPrompt)
 }
 
+// TestSendMessage_RetryNeedsNoPrompt pins the retry exception: a retry
+// re-issues the stored prompt, so an empty prompt is accepted and the
+// run is dispatched.
+func TestSendMessage_RetryNeedsNoPrompt(t *testing.T) {
+	t.Parallel()
+	b, _ := newTestBackend(t)
+	coord := newBlockingCoordinator()
+	ws := insertAgentWorkspace(t, b, coord)
+
+	err := b.SendMessage(ws.ID, proto.AgentMessage{SessionID: "S1", Retry: true})
+	require.NoError(t, err)
+
+	select {
+	case <-coord.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retry never entered RunAccepted")
+	}
+	close(coord.release)
+	ws.runWG.Wait()
+}
+
 func TestSendMessage_SessionMissing(t *testing.T) {
 	t.Parallel()
 	b, _ := newTestBackend(t)

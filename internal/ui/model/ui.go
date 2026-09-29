@@ -1031,20 +1031,6 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptHistory.index = -1
 		m.promptHistory.draft = ""
 
-	case resendPromptMsg:
-		// The session may have been closed, or a run started, while the
-		// prompt was being read back.
-		if !m.hasSession() {
-			cmds = append(cmds, util.ReportWarn("No session to resend a prompt in"))
-			break
-		}
-		if m.isAgentBusy() {
-			cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before resending a prompt..."))
-			break
-		}
-		m.historyReset()
-		cmds = append(cmds, m.sendMessage(msg.prompt, msg.attachments...), m.loadPromptHistory())
-
 	case closeDialogMsg:
 		m.dialog.CloseFrontDialog()
 
@@ -3165,9 +3151,9 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				cmds = append(cmds, cmd)
 			}
 			return true
-		case keys.Matches(msg, m.keyMap.ResendPrompt):
+		case keys.Matches(msg, m.keyMap.RetryPrompt):
 			if m.state == uiChat && m.hasSession() {
-				cmds = append(cmds, m.resendLastPrompt())
+				cmds = append(cmds, m.retryLastPrompt())
 				return true
 			}
 		case keys.Matches(msg, m.keyMap.Chat.Details) && m.isCompact:
@@ -4118,7 +4104,7 @@ func (m *UI) FullHelp() [][]key.Binding {
 			k.ToggleYolo,
 		)
 		if hasSession {
-			mainBinds = append(mainBinds, k.Chat.NewSession, k.Chat.EndFollow, k.ResendPrompt)
+			mainBinds = append(mainBinds, k.Chat.NewSession, k.Chat.EndFollow, k.RetryPrompt)
 		}
 		if m.canToggleSidebar() {
 			mainBinds = append(mainBinds, k.Chat.ToggleSidebar)

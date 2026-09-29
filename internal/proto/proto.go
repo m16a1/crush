@@ -164,6 +164,9 @@ type AgentMessage struct {
 	Channel           string       `json:"channel,omitempty"`
 	Prompt            string       `json:"prompt"`
 	Attachments       []Attachment `json:"attachments,omitempty"`
+	// Retry, when true, re-issues the session's most recent prompt
+	// instead of sending Prompt. Prompt must be empty.
+	Retry bool `json:"retry,omitempty"`
 }
 
 // ShellCommandRequest represents a request to run a shell command directly.

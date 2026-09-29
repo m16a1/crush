@@ -41,6 +41,7 @@ func (b *Backend) SendMessage(workspaceID string, msg proto.AgentMessage) error 
 	if err := agent.ValidateCall(agent.SessionAgentCall{
 		SessionID:   msg.SessionID,
 		Prompt:      msg.Prompt,
+		Retry:       msg.Retry,
 		Attachments: proto.AttachmentsToMessage(msg.Attachments),
 	}); err != nil {
 		return err
@@ -92,6 +93,9 @@ func (b *Backend) runAgent(ws *Workspace, msg proto.AgentMessage, accept *agent.
 	ctx := ws.ctx
 	if msg.HiddenUserMessage {
 		ctx = message.WithHiddenUserMessage(ctx)
+	}
+	if msg.Retry {
+		ctx = agent.WithRetry(ctx)
 	}
 	if msg.RunID != "" {
 		ctx = agent.WithRunID(ctx, msg.RunID)

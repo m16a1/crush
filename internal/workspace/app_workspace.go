@@ -115,6 +115,14 @@ func (w *AppWorkspace) AgentRun(ctx context.Context, sessionID, prompt string, a
 	return err
 }
 
+func (w *AppWorkspace) AgentRetry(ctx context.Context, sessionID string) error {
+	if w.app.AgentCoordinator == nil {
+		return errors.New("agent coordinator not initialized")
+	}
+	_, err := w.app.AgentCoordinator.Run(agent.WithRetry(ctx), sessionID, "")
+	return err
+}
+
 func (w *AppWorkspace) AgentRunChannel(ctx context.Context, channel, sessionID, prompt string, attachments ...message.Attachment) error {
 	if w.app.AgentCoordinator == nil {
 		return errors.New("agent coordinator not initialized")

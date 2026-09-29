@@ -511,14 +511,31 @@ func (c *Client) SetMainAgent(ctx context.Context, id, agentID string) error {
 // to distinguish its own turn's terminal event from any concurrent
 // turn on the same session (e.g. interactive TUI usage).
 func (c *Client) SendMessage(ctx context.Context, id string, sessionID, runID, channel, prompt string, attachments ...message.Attachment) error {
-	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/agent", id), nil, jsonBody(proto.AgentMessage{
+	return c.postAgentMessage(ctx, id, proto.AgentMessage{
 		HiddenUserMessage: message.HiddenUserMessage(ctx),
 		SessionID:         sessionID,
 		RunID:             runID,
 		Channel:           channel,
 		Prompt:            prompt,
 		Attachments:       proto.AttachmentsFromMessage(attachments),
-	}), http.Header{"Content-Type": []string{"application/json"}})
+	})
+}
+
+// RetryMessage asks the workspace's agent to re-run the session's most
+// recent prompt. It sends no prompt of its own: the server discards the
+// previous attempt's output and answers the existing user message again.
+func (c *Client) RetryMessage(ctx context.Context, id, sessionID string) error {
+	return c.postAgentMessage(ctx, id, proto.AgentMessage{
+		SessionID: sessionID,
+		Retry:     true,
+	})
+}
+
+// postAgentMessage posts an already-built AgentMessage to the agent
+// endpoint and normalizes the response handling shared by SendMessage
+// and RetryMessage.
+func (c *Client) postAgentMessage(ctx context.Context, id string, msg proto.AgentMessage) error {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/agent", id), nil, jsonBody(msg), http.Header{"Content-Type": []string{"application/json"}})
 	if err != nil {
 		return fmt.Errorf("failed to send message to agent: %w", err)
 	}

@@ -113,16 +113,22 @@ type SessionAgentCall struct {
 	RunID             string
 	Channel           string
 	HiddenUserMessage bool
-	Prompt            string
-	ProviderOptions   fantasy.ProviderOptions
-	Attachments       []message.Attachment
-	MaxOutputTokens   int64
-	Temperature       *float64
-	TopP              *float64
-	TopK              *int64
-	FrequencyPenalty  *float64
-	PresencePenalty   *float64
-	NonInteractive    bool
+	// Retry, when true, re-issues the session's most recent prompt
+	// against the existing history instead of creating a new user
+	// message. The previous attempt's trailing assistant and tool
+	// output is deleted so the retried answer replaces it. Prompt must
+	// be empty for a retry.
+	Retry            bool
+	Prompt           string
+	ProviderOptions  fantasy.ProviderOptions
+	Attachments      []message.Attachment
+	MaxOutputTokens  int64
+	Temperature      *float64
+	TopP             *float64
+	TopK             *int64
+	FrequencyPenalty *float64
+	PresencePenalty  *float64
+	NonInteractive   bool
 	// OnComplete, when non-nil, replaces the default RunComplete
 	// publish path: the inner Run hands the terminal payload to this
 	// callback instead of emitting it on the RunComplete broker. The
@@ -622,6 +628,15 @@ func (a *sessionAgent) publishRunComplete(ctx context.Context, call SessionAgent
 // (e.g. backend.SendMessage) can apply the same checks and keep the error
 // contract consistent.
 func ValidateCall(call SessionAgentCall) error {
+	if call.Retry {
+		// A retry carries no prompt: it re-issues the newest prompt
+		// already stored in the session, so only the session is
+		// required.
+		if call.SessionID == "" {
+			return ErrSessionMissing
+		}
+		return nil
+	}
 	if call.Prompt == "" && !message.ContainsTextAttachment(call.Attachments) {
 		return ErrEmptyPrompt
 	}
@@ -690,6 +705,16 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	}
 
 	if a.IsSessionBusy(call.SessionID) {
+		// A retry has no prompt of its own, so it cannot be folded into
+		// a running turn the way a queued follow-up is. Refuse it
+		// instead of queueing an empty prompt.
+		if call.Retry {
+			if call.Accepted != nil {
+				call.Accepted.Close()
+			}
+			sessMu.Unlock()
+			return nil, ErrSessionBusy
+		}
 		// Busy: an earlier prompt is active. Queue this call so it is
 		// folded into (or sequenced after) the active turn, and release any
 		// accept reservation. A Cancel arriving after this point sees the
@@ -788,12 +813,29 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		}()
 	}
 
-	// Add the user message to the session.
-	_, err = a.createUserMessage(ctx, call)
-	if err != nil {
-		return nil, err
+	// Add the user message to the session, unless this is a retry. A
+	// retry re-issues the newest prompt already stored in the session:
+	// the previous attempt's trailing output is deleted and the run
+	// proceeds with an empty prompt, so the model answers the existing
+	// user message instead of a duplicate one.
+	if call.Retry {
+		trimmed, err := a.discardTrailingTurn(ctx, msgs)
+		if err != nil {
+			return nil, err
+		}
+		msgs = trimmed
+		call.Prompt = ""
+		call.Attachments = nil
+		// The surviving user message is the turn's prompt, so a cancel
+		// must not write a replacement for it.
+		userMsgCreated = true
+	} else {
+		_, err = a.createUserMessage(ctx, call)
+		if err != nil {
+			return nil, err
+		}
+		userMsgCreated = true
 	}
-	userMsgCreated = true
 
 	// Add the session to the context. The run context (genCtx) and its
 	// cancel func were already created and registered under the dispatch
@@ -1643,6 +1685,47 @@ func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentC
 		return message.Message{}, fmt.Errorf("failed to create user message: %w", err)
 	}
 	return msg, nil
+}
+
+// discardTrailingTurn deletes every message written after the newest
+// retryable user prompt in msgs and returns msgs truncated to end at
+// that prompt. It is the retry path's cleanup: the previous attempt's
+// assistant and tool output must not survive alongside the retried
+// answer. It returns [ErrNothingToRetry] when msgs holds no prompt.
+func (a *sessionAgent) discardTrailingTurn(ctx context.Context, msgs []message.Message) ([]message.Message, error) {
+	last := -1
+	for i, msg := range msgs {
+		if isRetryablePrompt(msg) {
+			last = i
+		}
+	}
+	if last == -1 {
+		return nil, ErrNothingToRetry
+	}
+	for _, msg := range msgs[last+1:] {
+		if err := a.messages.Delete(ctx, msg.ID); err != nil {
+			return nil, fmt.Errorf("failed to delete previous turn message: %w", err)
+		}
+	}
+	return msgs[:last+1], nil
+}
+
+// isRetryablePrompt reports whether msg is a user prompt a retry can
+// re-issue: a real user turn carrying text or attachments, as opposed
+// to a summary, a hidden continuation, or an attachment-free shell
+// command.
+func isRetryablePrompt(msg message.Message) bool {
+	if msg.Role != message.User || msg.IsSummaryMessage {
+		return false
+	}
+	content := msg.Content()
+	if content.Hidden {
+		return false
+	}
+	if strings.TrimSpace(content.Text) != "" {
+		return true
+	}
+	return len(msg.BinaryContent()) > 0
 }
 
 func (a *sessionAgent) preparePrompt(msgs []message.Message, supportsImages bool, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart) {
