@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,6 +82,10 @@ const pasteColsThreshold = 1000
 
 // Session details panel max height.
 const sessionDetailsMaxHeight = 20
+
+// maxNotificationMessage bounds the error text carried in a desktop
+// notification so a long provider error cannot overflow the banner.
+const maxNotificationMessage = 200
 
 // hyperCreditsPollInterval is how often the Hyper credits balance is
 // refreshed while no session is running.
@@ -364,8 +367,10 @@ type UI struct {
 	sidebarDrawLogo         string // logo to render (may differ from sidebarLogo for short heights)
 
 	// Notification state
-	notifyBackend       notification.Backend
-	notifyWindowFocused bool
+	notifyBackend notification.Backend
+	// notificationSoundsMuted disables alert sounds for the current session
+	// without affecting the visual backend or the global configuration.
+	notificationSoundsMuted bool
 	// custom commands & mcp commands
 	customCommands []commands.CustomCommand
 	mcpPrompts     []commands.MCPPrompt
@@ -517,7 +522,6 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		lspStates:           make(map[string]workspace.LSPClientInfo),
 		mcpStates:           make(map[string]mcp.ClientInfo),
 		notifyBackend:       notification.NoopBackend{},
-		notifyWindowFocused: true,
 		initialSessionID:    initialSessionID,
 		continueLastSession: continueLast,
 		skillStates:         skills.GetLatestStates(),
@@ -650,13 +654,68 @@ func (m *UI) loadInitialSession() tea.Cmd {
 	}
 }
 
-// sendNotification returns a command that sends a notification if allowed by policy.
+// sendNotification returns a command that sends a notification and plays the
+// matching alert sound, if allowed by policy.
 func (m *UI) sendNotification(n notification.Notification) tea.Cmd {
 	if !m.shouldSendNotification() {
 		return nil
 	}
 
-	return m.notifyBackend.Send(n)
+	cmds := make([]tea.Cmd, 0, 2)
+	if m.notifyBackend != nil {
+		cmds = append(cmds, m.notifyBackend.Send(n))
+	}
+	if cmd := m.notificationSoundCmd(n.Kind); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
+}
+
+// notificationSoundCmd returns a command that runs the configured (or
+// platform-default) alert sound for the notification kind. It returns nil when
+// no sound is configured for the outcome. Overrides come from the CRUSH_
+// NOTIFICATION_SOUND_* environment variables, read from the resolved config
+// env (crush.json "env") first and the process environment second, so mainline
+// Crush is unaffected.
+func (m *UI) notificationSoundCmd(kind notification.Kind) tea.Cmd {
+	if m.notificationSoundsMuted {
+		return nil
+	}
+	cfg := m.com.Config()
+	if cfg == nil || cfg.Options == nil {
+		return nil
+	}
+
+	lookup := os.LookupEnv
+	if len(cfg.Env) > 0 {
+		env := cfg.Env
+		lookup = func(key string) (string, bool) {
+			if value, ok := env[key]; ok {
+				return value, true
+			}
+			return os.LookupEnv(key)
+		}
+	}
+
+	command := notification.SoundCommand(kind, lookup)
+	if command == "" {
+		return nil
+	}
+
+	cwd := os.TempDir()
+	if m.com.Workspace != nil && m.com.Workspace.WorkingDir() != "" {
+		cwd = m.com.Workspace.WorkingDir()
+	}
+	return func() tea.Msg {
+		if err := shell.Run(context.Background(), shell.RunOptions{
+			Command: command,
+			Cwd:     cwd,
+			Env:     os.Environ(),
+		}); err != nil {
+			slog.Debug("Notification sound failed", "error", err, "kind", kind)
+		}
+		return nil
+	}
 }
 
 // selectNotificationBackend chooses the appropriate notification backend based
@@ -699,25 +758,21 @@ func selectNotificationBackend(caps common.Capabilities, cfg *config.Config) not
 		return notification.NewOSCBackend(notification.Icon, caps.OSC99Notifications)
 	}
 
-	// Local sessions: prefer OSC on macOS because the native backend (beeep)
-	// uses terminal-notifier or AppleScript, which is slow and doesn't display
-	// icons properly. Also prefer OSC where native notifications are unavailable
-	// (illumos/solaris). OSC 99 provides a polished experience with icon support.
-	if runtime.GOOS == "darwin" || !notification.NativeSupported {
-		slog.Debug("Selected OSCBackend for local session", "osc99_supported", caps.OSC99Notifications, "native_supported", notification.NativeSupported)
-		return notification.NewOSCBackend(notification.Icon, caps.OSC99Notifications)
+	// Local sessions: prefer OSC 99 wherever the terminal supports it, since
+	// it is fast and renders icons. Otherwise use the native OS notifications
+	// when available; OSC 777 is only a last resort because few terminals
+	// implement it and an unsupported sequence is silently dropped.
+	if caps.OSC99Notifications {
+		slog.Debug("Selected OSCBackend for local session", "osc99_supported", true)
+		return notification.NewOSCBackend(notification.Icon, true)
 	}
-
-	// Non-macOS local sessions use native OS notifications if focus events are supported.
-	// Without focus events, we can't suppress notifications when focused, so
-	// we disable them entirely to avoid spamming the user.
-	if caps.ReportFocusEvents {
+	if notification.NativeSupported {
 		slog.Debug("Selected NativeBackend for local session")
 		return notification.NewNativeBackend(notification.Icon)
 	}
 
-	slog.Debug("Selected NoopBackend (focus events not supported)")
-	return notification.NoopBackend{}
+	slog.Debug("Selected OSCBackend for local session", "osc99_supported", false)
+	return notification.NewOSCBackend(notification.Icon, false)
 }
 
 func (m *UI) updateNotificationBackend() {
@@ -725,15 +780,15 @@ func (m *UI) updateNotificationBackend() {
 	m.notifyBackend = selectNotificationBackend(m.caps, cfg)
 }
 
-// shouldSendNotification returns true if notifications should be sent based on
-// current state. Focus reporting must be supported, window must not be
-// focused, and notifications must not be disabled in config.
+// shouldSendNotification reports whether alerts are enabled. Notifications fire
+// whether or not the terminal window is focused, so the only thing that
+// suppresses them is setting notifications to "disabled".
 func (m *UI) shouldSendNotification() bool {
 	cfg := m.com.Config()
 	if cfg != nil && cfg.Options != nil && cfg.Options.Notifications == "disabled" {
 		return false
 	}
-	return m.caps.ReportFocusEvents && !m.notifyWindowFocused
+	return true
 }
 
 // setState changes the UI state and focus.
@@ -806,15 +861,14 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.sendProgressBar {
 			m.sendProgressBar = slices.Contains(msg, "WT_SESSION")
 		}
+		// The environment is known now (e.g. SSH), so pick a backend even
+		// before capability replies arrive; they refine the choice later.
+		m.updateNotificationBackend()
 		cmds = append(cmds, common.QueryCmd(uv.Environ(msg)))
 	case tea.ModeReportMsg:
 		m.updateNotificationBackend()
 	case uv.UnknownOscEvent:
 		m.updateNotificationBackend()
-	case tea.FocusMsg:
-		m.notifyWindowFocused = true
-	case tea.BlurMsg:
-		m.notifyWindowFocused = false
 	case dialog.CollapseInlineMsg:
 		m.focusActiveInline(uiFocusMain)
 	case pubsub.Event[notify.Notification]:
@@ -861,6 +915,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// plan handoff. (Loading the session that was just created for the
 		// first plan-mode prompt is not a switch; the IDs match then.)
 		if m.session == nil || m.session.ID != msg.session.ID {
+			// The mute is scoped to the session it was set in.
+			m.notificationSoundsMuted = false
 			if cmd := m.resetPlanModeState(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -2219,6 +2275,14 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			}
 		} else {
 			m.toggleYoloMode()
+		}
+		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionToggleNotificationSounds:
+		m.notificationSoundsMuted = !m.notificationSoundsMuted
+		if m.notificationSoundsMuted {
+			cmds = append(cmds, util.CmdHandler(util.NewInfoMsg("Notification sounds disabled for this session")))
+		} else {
+			cmds = append(cmds, util.CmdHandler(util.NewInfoMsg("Notification sounds enabled")))
 		}
 		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionSelectNotificationStyle:
@@ -5569,7 +5633,7 @@ func (m *UI) openCommandsDialog() tea.Cmd {
 	hasTodos := hasSession && hasIncompleteTodos(m.session.Todos)
 	hasQueue := m.promptQueue > 0
 
-	commands, err := dialog.NewCommands(m.com, sessionID, hasSession, hasTodos, hasQueue, m.customCommands, m.mcpPrompts)
+	commands, err := dialog.NewCommands(m.com, sessionID, hasSession, hasTodos, hasQueue, m.notificationSoundsMuted, m.customCommands, m.mcpPrompts)
 	if err != nil {
 		return util.ReportError(err)
 	}
@@ -5847,6 +5911,7 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 		cmds = append(cmds, m.sendNotification(notification.Notification{
 			Title:   "Crush is waiting...",
 			Message: fmt.Sprintf("Agent's turn completed in \"%s\"", n.SessionTitle),
+			Kind:    notification.KindSuccess,
 		}))
 		// Show what the stored balance says right away, and fetch again:
 		// the refresh for the turn's last response is only kicked off once
@@ -5856,6 +5921,17 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 			cmds = append(cmds, m.fetchHyperCredits())
 		}
 	case notify.TypeAgentError:
+		message := n.Message
+		if message == "" {
+			message = "Agent's turn failed"
+		} else if runes := []rune(message); len(runes) > maxNotificationMessage {
+			message = string(runes[:maxNotificationMessage]) + "…"
+		}
+		cmds = append(cmds, m.sendNotification(notification.Notification{
+			Title:   "Crush failed",
+			Message: message,
+			Kind:    notification.KindError,
+		}))
 		// Terminal edge like TypeAgentFinished; fall through to the
 		// busy/queue refresh below.
 	case notify.TypeReAuthenticate:
@@ -5960,6 +6036,7 @@ func (m *UI) newSession() tea.Cmd {
 	m.chat.ClearMessages()
 	m.pillsExpanded = false
 	m.pillsAutoExpanded = false
+	m.notificationSoundsMuted = false
 	m.promptQueue = 0
 	m.promptQueueItems = nil
 	m.promptQueueCheckedAt = time.Now()

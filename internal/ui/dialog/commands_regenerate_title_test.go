@@ -26,7 +26,7 @@ func newCommandsDialog(t *testing.T, sessionID string, hasSession bool) *Command
 		Workspace: &commandsWorkspace{cfg: config.Config{Options: &config.Options{TUI: &config.TUIOptions{}}}},
 		Styles:    &sty,
 	}
-	dialog, err := NewCommands(com, sessionID, hasSession, false, false, nil, nil)
+	dialog, err := NewCommands(com, sessionID, hasSession, false, false, false, nil, nil)
 	require.NoError(t, err)
 	return dialog
 }

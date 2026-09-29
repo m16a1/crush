@@ -191,6 +191,11 @@ option reset <list-key>    # clear a list option back to empty
   `auto-summarize`, `provider-auto-update`,
   `default-providers`. Example: `option metrics false` disables metrics.
 - **String keys**: `data-directory`, `initialize-as`, `notifications`.
+- **Notification sounds**: configured with environment variables, not config
+  keys: `CRUSH_NOTIFICATION_SOUND_SUCCESS`, `_ERROR`, and `_INFO` hold the shell
+  command for each outcome (an empty value disables it; unset uses a platform
+  default). Set them in your shell or via the top-level `env` map in
+  `crush.json`.
 - **Attribution keys**: `attribution-trailer-style` (`none`, `co-authored-by`,
   `assisted-by`) and `attribution-generated-with` (boolean).
 - **UI settings**: `option ui compact BOOL`, `option ui diff unified|split`,

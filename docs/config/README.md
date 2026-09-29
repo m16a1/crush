@@ -551,6 +551,19 @@ option skill-path ./skills
 option attribution-trailer-style assisted-by
 ```
 
+Alert sounds are configured with environment variables, not config keys, so a
+configuration that mainline Crush also reads is unaffected:
+
+```text
+CRUSH_NOTIFICATION_SOUND_SUCCESS   command that plays the success sound
+CRUSH_NOTIFICATION_SOUND_ERROR     command that plays the failure sound
+CRUSH_NOTIFICATION_SOUND_INFO      command for neutral alerts
+```
+
+An unset variable uses a platform default; setting one to an empty value
+disables sound for that outcome. They can be exported in your shell or listed
+under the top-level `env` map in `crush.json`.
+
 #### `option reset`
 
 Clear every value previously added to a list option. Values added after the

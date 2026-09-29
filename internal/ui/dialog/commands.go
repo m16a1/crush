@@ -60,6 +60,10 @@ type Commands struct {
 	hasQueue   bool
 	selected   CommandType
 
+	// notificationSoundsMuted mirrors the invoking UI's per-session mute so
+	// the sound toggle command can show the action it will perform.
+	notificationSoundsMuted bool
+
 	spinner spinner.Model
 	loading bool
 
@@ -79,16 +83,17 @@ type Commands struct {
 var _ Dialog = (*Commands)(nil)
 
 // NewCommands creates a new commands dialog.
-func NewCommands(com *common.Common, sessionID string, hasSession, hasTodos, hasQueue bool, customCommands []commands.CustomCommand, mcpPrompts []commands.MCPPrompt) (*Commands, error) {
+func NewCommands(com *common.Common, sessionID string, hasSession, hasTodos, hasQueue bool, notificationSoundsMuted bool, customCommands []commands.CustomCommand, mcpPrompts []commands.MCPPrompt) (*Commands, error) {
 	c := &Commands{
-		com:            com,
-		selected:       SystemCommands,
-		sessionID:      sessionID,
-		hasSession:     hasSession,
-		hasTodos:       hasTodos,
-		hasQueue:       hasQueue,
-		customCommands: customCommands,
-		mcpPrompts:     mcpPrompts,
+		com:                     com,
+		selected:                SystemCommands,
+		sessionID:               sessionID,
+		hasSession:              hasSession,
+		hasTodos:                hasTodos,
+		hasQueue:                hasQueue,
+		notificationSoundsMuted: notificationSoundsMuted,
+		customCommands:          customCommands,
+		mcpPrompts:              mcpPrompts,
 	}
 
 	help := help.New()
@@ -538,6 +543,14 @@ func (c *Commands) defaultCommands() []*CommandItem {
 	// Add a command for selecting notification style via picker dialog.
 	notificationLabel := "Notification Style"
 	commands = append(commands, NewCommandItem(c.com.Styles, "select_notifications", notificationLabel, "", ActionOpenDialog{DialogID: NotificationsID}))
+
+	// Add a per-session toggle for alert sounds. The label shows the action
+	// the toggle will perform.
+	soundsLabel := "Disable Notification Sounds"
+	if c.notificationSoundsMuted {
+		soundsLabel = "Enable Notification Sounds"
+	}
+	commands = append(commands, NewCommandItem(c.com.Styles, "toggle_sounds", soundsLabel, "", ActionToggleNotificationSounds{}))
 
 	commands = append(
 		commands,
