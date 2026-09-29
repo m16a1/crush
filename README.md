@@ -11,6 +11,42 @@
 
 <p align="center"><img width="800" alt="Crush Demo" src="https://github.com/user-attachments/assets/58280caf-851b-470a-b6f7-d5c4ea8a1968" /></p>
 
+## About This Fork
+
+Crush is the best AI coding agent I have used, but it lacks a few features I
+consider essential. This repository is an opinionated fork that fills those
+gaps while staying compatible with mainline Crush. I track upstream closely
+and merge regularly; everything below is **in addition to** upstream.
+
+### Fork-Specific Features
+
+- **Configurable notification sounds:** outcome-based alert sounds
+  (success/error/info) with per-outcome env-var overrides
+  (`CRUSH_NOTIFICATION_SOUND_SUCCESS` / `_ERROR` / `_INFO`), platform defaults
+  (macOS system sounds, terminal bell elsewhere), and a per-session mute toggle
+  in the command palette
+- **Session export to Markdown:** export an entire session as a Markdown file
+  from the command palette
+- **Regenerate session title:** generate a new session title from the command
+  palette, using the real token budget and the full conversation
+- **Resend last prompt:** press `ctrl+r` to resend the previous prompt
+- **Generation metrics:** live generation speed shown while a response streams,
+  per-step tool-call metrics, weighted average generation speed, and average
+  prefill speed instead of average time-to-first-token
+- **Private TLS certificates:** providers and MCP servers can use custom TLS
+  certificates for self-hosted or enterprise endpoints
+- **Non-Latin keyboard layouts:** keyboard shortcuts work correctly on
+  non-Latin layouts
+- **Smarter session naming:** titles generated from the real budget and whole
+  conversation, handling reasoning-first models, single-request models, and
+  long opening messages
+- **Better error reporting:** provider error text shown directly instead of
+  raw response bodies; missing sessions reported instead of silent success;
+  git failures no longer reported as a clean tree
+- **Notification improvements:** notifications fire regardless of window focus;
+  auto backend selection prefers OSC 99 on all platforms; error notifications
+  include the actual error message (capped at 200 characters)
+
 ## Features
 
 - **Multi-Model:** choose from a wide range of LLMs or add your own via OpenAI- or Anthropic-compatible APIs
