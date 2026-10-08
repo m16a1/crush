@@ -1,8 +1,10 @@
 package chat
 
 import (
+	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/x/ansi"
@@ -108,4 +110,75 @@ func TestBashBackgroundStartShowsPIDAndCommand(t *testing.T) {
 	require.Contains(t, out, "PID 5142")
 	require.Contains(t, out, "running")
 	require.Contains(t, out, "Command: npm run dev")
+}
+
+// TestJobCommandWrapsInsteadOfTruncating verifies a long job command stays
+// readable in full.
+//
+// The job body holds the only copy of the command for a background job, and
+// it truncates its lines to fit the pane. A command longer than the pane
+// would therefore lose its tail, which is exactly the part that says what
+// the job is doing, and expanding the tool would not bring it back.
+func TestJobCommandWrapsInsteadOfTruncating(t *testing.T) {
+	t.Parallel()
+
+	const cmd = "cd /Users/dmitryx/Documents/premium && START=$(date +%s) && ./scripts/app-test.sh > /tmp/apptest_guard2.log 2>&1"
+	sty := styles.CharmtonePantera()
+
+	for _, expanded := range []bool{false, true} {
+		out := ansi.Strip((&BashToolRenderContext{}).RenderTool(&sty, 120, &ToolRenderOpts{
+			ToolCall: message.ToolCall{
+				ID:       "b2",
+				Name:     "bash",
+				Input:    `{"command":"` + cmd + `","description":"app tests","run_in_background":true}`,
+				Finished: true,
+			},
+			Result: &message.ToolResult{
+				ToolCallID: "b2",
+				Content:    "Background shell started with ID: 202",
+				Metadata:   `{"description":"app tests","background":true,"shell_id":"202","pid":5142}`,
+			},
+			Status:          ToolStatusSuccess,
+			ExpandedContent: expanded,
+		}))
+
+		require.NotContains(t, out, "…", "the command must wrap rather than truncate")
+		require.Contains(t, unwrappedText(out), unwrappedText(cmd),
+			"the whole command must be visible")
+	}
+}
+
+// unwrappedText drops all whitespace so a string that was wrapped across
+// lines can be matched against the single line it came from.
+func unwrappedText(s string) string {
+	return strings.Join(strings.Fields(s), "")
+}
+
+// TestJobCommandStaysWithinWidth verifies the wrapped command never overruns
+// the pane, and never loses a character to the wrap.
+//
+// A line wider than the pane is wrapped again by the terminal, which splits
+// it across two rows and leaves a stray line in the transcript. A command
+// with no breakable spaces is the hard case: the wrapper has to split the
+// word itself rather than leave it long or drop its tail.
+func TestJobCommandStaysWithinWidth(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	commands := []string{
+		"cd /Users/dmitryx/Documents/premium && START=$(date +%s) && ./scripts/app-test.sh > /tmp/apptest_guard2.log 2>&1",
+		"echo " + strings.Repeat("a", 200),
+	}
+
+	for _, cmd := range commands {
+		for width := 20; width <= 120; width++ {
+			out := jobCommandContent(&sty, cmd, width)
+			for i, line := range strings.Split(out, "\n") {
+				require.LessOrEqual(t, lipgloss.Width(line), width,
+					"line %d of %q at width %d overruns the pane: %q", i, cmd, width, line)
+			}
+			require.Contains(t, unwrappedText(ansi.Strip(out)), unwrappedText(cmd),
+				"the whole command must survive the wrap at width %d", width)
+		}
+	}
 }

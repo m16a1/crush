@@ -62,8 +62,7 @@ func (b *BashToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *
 
 	if meta.Background {
 		description := cmp.Or(meta.Description, params.Command)
-		content := jobCommandBody(params.Command) + opts.Result.Content
-		return renderJobTool(sty, opts, cappedWidth, "Start", meta.PID, "running", description, content)
+		return renderJobTool(sty, opts, cappedWidth, "Start", meta.PID, "running", description, params.Command, opts.Result.Content)
 	}
 
 	// Regular bash command. The command is always rendered expanded
@@ -155,11 +154,11 @@ func (j *JobOutputToolRenderContext) RenderTool(sty *styles.Styles, width int, o
 		state = "error"
 	}
 
-	content := jobCommandBody(meta.Command)
+	content := ""
 	if opts.HasResult() {
-		content += opts.Result.Content
+		content = opts.Result.Content
 	}
-	return renderJobTool(sty, opts, cappedWidth, "Output", meta.PID, state, description, content)
+	return renderJobTool(sty, opts, cappedWidth, "Output", meta.PID, state, description, meta.Command, content)
 }
 
 // -----------------------------------------------------------------------------
@@ -208,21 +207,21 @@ func (j *JobKillToolRenderContext) RenderTool(sty *styles.Styles, width int, opt
 		state = "error"
 	}
 
-	content := jobCommandBody(meta.Command)
+	content := ""
 	if opts.HasResult() {
-		content += opts.Result.Content
+		content = opts.Result.Content
 	}
-	return renderJobTool(sty, opts, cappedWidth, "Kill", meta.PID, state, description, content)
+	return renderJobTool(sty, opts, cappedWidth, "Kill", meta.PID, state, description, meta.Command, content)
 }
 
-// jobCommandBody renders the leading "Command: ..." line that keeps the
-// exact command visible for every job tool. It is empty when the command
-// is unknown, so callers can simply concatenate it with the output body.
-func jobCommandBody(command string) string {
-	if command == "" {
-		return ""
-	}
-	return "Command: " + command + "\n"
+// jobCommandContent renders a job's exact command. The job body truncates
+// its lines to fit the pane, which would hide the tail of a long command,
+// so the command wraps instead and stays fully readable at any width. The
+// indent comes from the style's padding rather than a literal leading
+// space so wrapped continuation lines line up under the first one.
+func jobCommandContent(sty *styles.Styles, command string, width int) string {
+	style := sty.Tool.ContentLine.PaddingLeft(toolBodyLeftPaddingTotal + 1).Width(width)
+	return capLineWidths(style.Render("Command: "+command), width)
 }
 
 // jobState describes a job's lifecycle state in one word for the header.
@@ -238,8 +237,8 @@ func jobState(done bool, exitCode int) string {
 }
 
 // renderJobTool renders a job-related tool with the common pattern:
-// header → nested check → early state → body.
-func renderJobTool(sty *styles.Styles, opts *ToolRenderOpts, width int, action string, pid int, state, description, content string) string {
+// header → nested check → early state → command → body.
+func renderJobTool(sty *styles.Styles, opts *ToolRenderOpts, width int, action string, pid int, state, description, command, content string) string {
 	// Once the job's terminal event has arrived it is authoritative for
 	// the state, even when the original result predated it.
 	if opts.JobDone {
@@ -257,13 +256,19 @@ func renderJobTool(sty *styles.Styles, opts *ToolRenderOpts, width int, action s
 	// Live output streamed in after the tool result is appended to the
 	// body so a running job shows progress.
 	content += opts.LiveJobOutput
-	if content == "" {
-		return header
-	}
 
 	bodyWidth := width - toolBodyLeftPaddingTotal
-	body := sty.Tool.Body.Render(toolOutputPlainContent(sty, content, bodyWidth, opts.ExpandedContent))
-	return joinToolParts(header, body)
+	var body []string
+	if command != "" {
+		body = append(body, sty.Tool.Body.Render(jobCommandContent(sty, command, bodyWidth)))
+	}
+	if content != "" {
+		body = append(body, sty.Tool.Body.Render(toolOutputPlainContent(sty, content, bodyWidth, opts.ExpandedContent)))
+	}
+	if len(body) == 0 {
+		return header
+	}
+	return joinToolParts(header, strings.Join(body, "\n"))
 }
 
 // jobHeader builds a header for job-related tools.
