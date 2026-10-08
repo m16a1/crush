@@ -148,14 +148,6 @@ func TestIsGitRepo(t *testing.T) {
 	require.True(t, isGitRepo(dir))
 }
 
-func runGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	full := append([]string{"-C", dir, "-c", "user.email=test@example.com", "-c", "user.name=Test"}, args...)
-	cmd := exec.CommandContext(t.Context(), "git", full...)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(out))
-}
-
 func TestBuildIncludesGitStatusInARepo(t *testing.T) {
 
 	if _, err := exec.LookPath("git"); err != nil {
@@ -182,12 +174,10 @@ func TestBuildIncludesGitStatusInARepo(t *testing.T) {
 
 func TestGetGitHelpersFailSoftOutsideARepo(t *testing.T) {
 
-	sh := newTestShell(t, t.TempDir())
+	dir := t.TempDir()
+	require.Empty(t, getGitBranch(dir))
 
-	branch, err := getGitBranch(t.Context(), sh)
-	require.NoError(t, err)
-	require.Empty(t, branch)
-
+	sh := newTestShell(t, dir)
 	commits, err := getGitRecentCommits(t.Context(), sh)
 	require.NoError(t, err)
 	require.Empty(t, commits)
