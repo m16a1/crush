@@ -268,10 +268,6 @@ type UI struct {
 	frameDirty       bool
 	frameSkipPut     bool
 	frameGCArmed     bool
-	// planReadySessionID holds the session whose plan run emitted the
-	// plan-ready marker but has not been confirmed for execution yet. It
-	// lets the user reopen the handoff prompt after dismissing it.
-	planReadySessionID string
 	// modeSwitching is true while the async agent-model update kicked off
 	// by setInputMode is still in flight; sending is blocked meanwhile.
 	modeSwitching bool
@@ -914,10 +910,6 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.focusActiveInline(uiFocusMain)
 	case pubsub.Event[notify.Notification]:
 		if cmd := m.handleAgentNotification(msg.Payload); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	case pubsub.Event[notify.RunComplete]:
-		if cmd := m.handlePlanHandoff(msg.Payload); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	case busyStateMsg:
@@ -3494,11 +3486,6 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				attachments := m.attachments.List()
 				m.attachments.Reset()
 				if len(value) == 0 && !message.ContainsTextAttachment(attachments) {
-					// Enter on an empty editor while a ready plan is pending
-					// reopens the dismissed handoff prompt.
-					if m.mode == uiInputModePlan && m.hasSession() && m.planReadySessionID == m.session.ID {
-						m.openPlanHandoff()
-					}
 					return nil
 				}
 
@@ -4993,9 +4980,6 @@ func (m *UI) applyModeSwitch(msg modeSwitchedMsg) []tea.Cmd {
 	m.mode = msg.mode
 	m.setEditorPrompt(m.yoloModeCached())
 	var cmds []tea.Cmd
-	if msg.continueSessionID != "" && m.session != nil && m.session.ID == msg.continueSessionID {
-		cmds = append(cmds, m.sendMessageInternal("Implement the plan.", true))
-	}
 	switch {
 	case msg.mode == uiInputModePlan:
 		cmds = append(cmds, util.CmdHandler(util.InfoMsg{Type: util.InfoTypePlan, Msg: planModeBannerMsg}))
@@ -5010,10 +4994,9 @@ func (m *UI) applyModeSwitch(msg modeSwitchedMsg) []tea.Cmd {
 // modeSwitchedMsg reports that the async agent switch started by
 // setInputMode has finished (successfully or not).
 type modeSwitchedMsg struct {
-	continueSessionID string
-	mode              uiInputMode
-	yolo              bool
-	err               error
+	mode uiInputMode
+	yolo bool
+	err  error
 }
 
 // closeCompletions closes the completions popup and resets state.
@@ -5401,9 +5384,6 @@ func (m *UI) sendMessageInternal(content string, hidden bool, attachments ...mes
 
 	// Start the turn timer.
 	common.StartTurn()
-
-	// Any new prompt supersedes a pending, unconfirmed plan.
-	m.setPlanReadyPending("")
 
 	var cmds []tea.Cmd
 	loadCmd, err := m.ensureSession()
@@ -5934,39 +5914,10 @@ func (m *UI) handlePermissionNotification(notification permission.PermissionNoti
 	}
 }
 
-// handlePlanHandoff checks whether a completed run in plan mode contained the
-// plan-ready sentinel marker and, if so, opens the plan handoff dialog.
-func (m *UI) handlePlanHandoff(rc notify.RunComplete) tea.Cmd {
-	if m.mode != uiInputModePlan {
-		return nil
-	}
-	if rc.Error != "" || rc.Cancelled {
-		return nil
-	}
-	if m.session == nil || rc.SessionID != m.session.ID {
-		return nil
-	}
-	if !common.PlanReadyMarkerPresent(rc.Text) {
-		slog.Debug("Plan run completed without ready marker", "session_id", rc.SessionID)
-		return nil
-	}
-	m.setPlanReadyPending(rc.SessionID)
-	if _, ok := m.activeInline.(*dialog.PlanHandoffInline); ok {
-		return nil
-	}
-	m.openPlanHandoff()
-	return nil
-}
-
-// resetPlanModeState drops any pending plan handoff and, when plan mode is
-// active, switches back to code mode. Used when the UI moves to a different
-// session, since plan mode is scoped to the session it was enabled in.
+// resetPlanModeState switches back to code mode when plan mode is active.
+// Used when the UI moves to a different session, since plan mode is scoped to
+// the session it was enabled in.
 func (m *UI) resetPlanModeState() tea.Cmd {
-	m.setPlanReadyPending("")
-	if _, ok := m.activeInline.(*dialog.PlanHandoffInline); ok {
-		m.activeInline = nil
-		m.textarea.Focus()
-	}
 	if m.mode != uiInputModePlan {
 		return nil
 	}
@@ -5978,45 +5929,6 @@ func (m *UI) resetPlanModeState() tea.Cmd {
 		return nil
 	}
 	return m.setInputMode(uiInputModeCode)
-}
-
-// setPlanReadyPending records (or clears, with an empty ID) the session that
-// has an unconfirmed ready plan.
-func (m *UI) setPlanReadyPending(sessionID string) {
-	m.planReadySessionID = sessionID
-}
-
-// openPlanHandoff replaces the textarea with the inline "switch to code"
-// prompt. Dismissing it keeps the pending plan, so the prompt can be reopened
-// by pressing enter on an empty editor while still in plan mode.
-func (m *UI) openPlanHandoff() {
-	inline := dialog.NewPlanHandoffInline(m.com)
-	inline.OnConfirm = func(yolo bool) tea.Cmd {
-		if m.com.Workspace.PermissionSkipRequests() != yolo {
-			m.toggleYoloMode()
-		}
-		m.setPlanReadyPending("")
-		sessionID := m.session.ID
-		cmd := m.setInputMode(uiInputModeCode)
-		return func() tea.Msg {
-			result := cmd()
-			if switched, ok := result.(modeSwitchedMsg); ok {
-				switched.continueSessionID = sessionID
-				return switched
-			}
-			return result
-		}
-	}
-	inline.OnRequestChanges = func(feedback string) tea.Cmd {
-		return m.sendMessage(feedback)
-	}
-	m.activeInline = inline
-	m.textarea.Blur()
-	m.focus = uiFocusEditor
-	m.activeInline.SetFocused(true)
-	if m.status != nil {
-		m.updateLayoutAndSize()
-	}
 }
 
 // handleAgentNotification translates domain agent events into desktop
