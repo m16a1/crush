@@ -25,6 +25,12 @@ func TestCommandBlocking(t *testing.T) {
 			shouldBlock: true,
 		},
 		{
+			name:        "block sleep via command blocker",
+			blockFuncs:  []BlockFunc{CommandsBlocker([]string{"sleep"})},
+			command:     "sleep 10",
+			shouldBlock: true,
+		},
+		{
 			name: "allow non-blocked command",
 			blockFuncs: []BlockFunc{
 				func(args []string) bool {

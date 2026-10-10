@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -289,4 +290,73 @@ func TestBackgroundShell_WaitContext_Canceled(t *testing.T) {
 	cancel()
 
 	require.False(t, bgShell.WaitContext(ctx))
+}
+
+func TestBackgroundShell_NotifyEvery(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	events := SubscribeJobEvents(ctx)
+
+	manager := newBackgroundShellManager()
+	bgShell, err := manager.Start(ctx, t.TempDir(), nil, "while true; do :; done", "long")
+	require.NoError(t, err)
+	t.Cleanup(func() { manager.Kill(bgShell.ID) })
+
+	bgShell.SetNotifyOnDone(true)
+	bgShell.SetNotifyEvery(50 * time.Millisecond)
+
+	require.True(t, waitForJobTick(events, bgShell.ID, 3*time.Second),
+		"expected a periodic update event")
+}
+
+func TestBackgroundShell_NotifyEveryStops(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	events := SubscribeJobEvents(ctx)
+
+	manager := newBackgroundShellManager()
+	bgShell, err := manager.Start(ctx, t.TempDir(), nil, "while true; do :; done", "long")
+	require.NoError(t, err)
+	t.Cleanup(func() { manager.Kill(bgShell.ID) })
+
+	bgShell.SetNotifyOnDone(true)
+	bgShell.SetNotifyEvery(30 * time.Millisecond)
+	require.True(t, waitForJobTick(events, bgShell.ID, 3*time.Second))
+
+	bgShell.SetNotifyEvery(0)
+
+	// Discard any update already in flight before asserting silence.
+	time.Sleep(100 * time.Millisecond)
+	for {
+		select {
+		case <-events:
+			continue
+		default:
+		}
+		break
+	}
+	require.False(t, waitForJobTick(events, bgShell.ID, 300*time.Millisecond),
+		"periodic updates must stop after SetNotifyEvery(0)")
+}
+
+// waitForJobTick reports whether a periodic update for shellID arrives
+// within timeout, discarding unrelated job events along the way.
+func waitForJobTick(events <-chan pubsub.Event[JobEvent], shellID string, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Payload.Type == JobEventTick && ev.Payload.ShellID == shellID {
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
 }

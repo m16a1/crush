@@ -26,7 +26,8 @@ type BashParams struct {
 	Description         string `json:"description" description:"A brief description of what the command does, try to keep it under 30 characters or so"`
 	Command             string `json:"command" description:"The command to execute"`
 	WorkingDir          string `json:"working_dir,omitempty" description:"The working directory to execute the command in (defaults to current directory)"`
-	RunInBackground     bool   `json:"run_in_background,omitempty" description:"Set to true (boolean) to run this command in the background. Use job_output to read the output later."`
+	RunInBackground     bool   `json:"run_in_background,omitempty" description:"Set to true (boolean) to run this command in the background. Its output is reported back automatically when it finishes; use job_output to read it sooner."`
+	NotifyEvery         int    `json:"notify_every,omitempty" description:"Seconds between automatic output updates while this command runs in the background. Use 0 to stop the updates."`
 	AutoBackgroundAfter int    `json:"auto_background_after,omitempty" description:"Seconds to wait before automatically moving the command to a background job (default: 60)"`
 }
 
@@ -35,6 +36,7 @@ type BashPermissionsParams struct {
 	Command             string `json:"command"`
 	WorkingDir          string `json:"working_dir"`
 	RunInBackground     bool   `json:"run_in_background"`
+	NotifyEvery         int    `json:"notify_every"`
 	AutoBackgroundAfter int    `json:"auto_background_after"`
 }
 
@@ -145,6 +147,40 @@ var bannedCommands = []string{
 	"pfctl",
 	"route",
 	"ufw",
+
+	// Blocking waits. Waiting on a background command is done with
+	// job_output or notify_every, never by stalling the turn with a
+	// fixed sleep.
+	"sleep",
+}
+
+// sleepWrappers are safe-listed commands that can be used to reach a
+// blocked command without triggering a permission prompt.
+var sleepWrappers = map[string]struct{}{
+	"env":     {},
+	"nice":    {},
+	"nohup":   {},
+	"timeout": {},
+}
+
+// blockWrappedSleep blocks `sleep` invoked through a safe-listed wrapper,
+// which would otherwise run without a permission prompt and bypass the
+// sleep ban.
+func blockWrappedSleep() shell.BlockFunc {
+	return func(args []string) bool {
+		if len(args) == 0 {
+			return false
+		}
+		if _, ok := sleepWrappers[args[0]]; !ok {
+			return false
+		}
+		for _, arg := range args[1:] {
+			if arg == "sleep" {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 func bashDescription(attribution *config.Attribution, modelID string) string {
@@ -167,6 +203,7 @@ func bashDescription(attribution *config.Attribution, modelID string) string {
 func blockFuncs() []shell.BlockFunc {
 	return []shell.BlockFunc{
 		shell.CommandsBlocker(bannedCommands),
+		blockWrappedSleep(),
 
 		// System package managers
 		shell.ArgumentsBlocker("apk", []string{"add"}, nil),
@@ -291,6 +328,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 
 				// Still running after fast-failure check - return as background job
 				bgShell.SetNotifyOnDone(true)
+				bgShell.SetNotifyEvery(time.Duration(params.NotifyEvery) * time.Second)
 				metadata := BashResponseMetadata{
 					StartTime:        startTime.UnixMilli(),
 					EndTime:          time.Now().UnixMilli(),
@@ -300,7 +338,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 					ShellID:          bgShell.ID,
 					PID:              bgShell.PID(),
 				}
-				response := fmt.Sprintf("Background shell started with ID: %s\n\nUse job_output tool to view output (wait=true to block for completion) or job_kill to terminate.", bgShell.ID)
+				response := fmt.Sprintf("Background shell started with ID: %s\n\nIts output is reported back automatically when it finishes. Set notify_every for updates while it runs, use job_output (wait=true to block for completion) to read it now, or job_kill to terminate.", bgShell.ID)
 				return fantasy.WithResponseMetadata(fantasy.NewTextResponse(response), metadata), nil
 			}
 
@@ -377,6 +415,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 
 			// Still running - keep as background job
 			bgShell.SetNotifyOnDone(true)
+			bgShell.SetNotifyEvery(time.Duration(params.NotifyEvery) * time.Second)
 			metadata := BashResponseMetadata{
 				StartTime:        startTime.UnixMilli(),
 				EndTime:          time.Now().UnixMilli(),
@@ -385,7 +424,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				Background:       true,
 				ShellID:          bgShell.ID,
 			}
-			response := fmt.Sprintf("Command is taking longer than expected and has been moved to background.\n\nBackground shell ID: %s\n\nUse job_output tool to view output (wait=true to block for completion) or job_kill to terminate.", bgShell.ID)
+			response := fmt.Sprintf("Command is taking longer than expected and has been moved to background.\n\nBackground shell ID: %s\n\nIts output is reported back automatically when it finishes. Use job_output (wait=true to block for completion) to read it now or job_kill to terminate.", bgShell.ID)
 			return fantasy.WithResponseMetadata(fantasy.NewTextResponse(response), metadata), nil
 		},
 	)

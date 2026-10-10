@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"charm.land/fantasy"
@@ -68,7 +69,7 @@ func TestBashTool_CustomAutoBackgroundThreshold(t *testing.T) {
 
 	resp := runBashTool(t, tool, ctx, BashParams{
 		Description:         "custom threshold",
-		Command:             "sleep 1.5 && echo done",
+		Command:             "while true; do :; done",
 		AutoBackgroundAfter: 1,
 	})
 
@@ -166,6 +167,28 @@ func TestBashTool_ChainedCommandsDenied(t *testing.T) {
 
 	require.Equal(t, 1, perms.requestCount)
 	require.Contains(t, resp.Content, "User denied permission")
+}
+
+func TestBashTool_BlocksSleep(t *testing.T) {
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+
+	for _, command := range []string{
+		"sleep 30",
+		"echo hi && sleep 30",
+		"timeout 5 sleep 30",
+		"env sleep 30",
+	} {
+		t.Run(command, func(t *testing.T) {
+			tool := newBashToolForTest(t.TempDir())
+			start := time.Now()
+			resp := runBashTool(t, tool, ctx, BashParams{
+				Description: "blocked sleep",
+				Command:     command,
+			})
+			require.Contains(t, resp.Content, "not allowed for security reasons")
+			require.Less(t, time.Since(start), 2*time.Second, "a blocked command must not wait")
+		})
+	}
 }
 
 func runBashTool(t *testing.T, tool fantasy.AgentTool, ctx context.Context, params BashParams) fantasy.ToolResponse {

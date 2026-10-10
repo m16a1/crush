@@ -83,6 +83,12 @@ type BackgroundShell struct {
 	// finish). Only such jobs are reported back to their conversation when
 	// they end.
 	notifyOnDone atomic.Bool
+	// notifyEvery is the interval, in nanoseconds, at which a running job
+	// reports its output back to its conversation. Zero disables the
+	// periodic updates.
+	notifyEvery atomic.Int64
+	// notifierOnce guards starting the periodic notifier goroutine.
+	notifierOnce sync.Once
 }
 
 // BackgroundShellManager manages background shell instances.
@@ -292,6 +298,53 @@ func (bs *BackgroundShell) SetNotifyOnDone(notify bool) {
 // session on completion.
 func (bs *BackgroundShell) NotifyOnDone() bool {
 	return bs.notifyOnDone.Load()
+}
+
+// SetNotifyEvery enables periodic output updates for a running job every
+// d. A non-positive interval disables them. The notifier goroutine starts
+// on the first enabled call and stops when the job finishes.
+func (bs *BackgroundShell) SetNotifyEvery(d time.Duration) {
+	if d <= 0 {
+		bs.notifyEvery.Store(0)
+		return
+	}
+	bs.notifyEvery.Store(int64(d))
+	bs.notifierOnce.Do(func() { go bs.notifyPeriodically() })
+}
+
+// notifyPeriodically publishes an update event every time the configured
+// interval elapses, for as long as the job is running. It re-reads the
+// interval on each tick so a later SetNotifyEvery call takes effect, and
+// exits as soon as the job finishes.
+func (bs *BackgroundShell) notifyPeriodically() {
+	const disabledPoll = 250 * time.Millisecond
+	for {
+		interval := time.Duration(bs.notifyEvery.Load())
+		if interval <= 0 {
+			select {
+			case <-bs.done:
+				return
+			case <-time.After(disabledPoll):
+				continue
+			}
+		}
+		select {
+		case <-bs.done:
+			return
+		case <-time.After(interval):
+			if bs.IsDone() {
+				return
+			}
+			publishJobEvent(JobEvent{
+				Type:        JobEventTick,
+				ShellID:     bs.ID,
+				SessionID:   bs.SessionID,
+				PID:         bs.Shell.ProcessID(),
+				Command:     bs.Command,
+				Description: bs.Description,
+			})
+		}
+	}
 }
 
 // GetOutput returns the current output of a background shell.

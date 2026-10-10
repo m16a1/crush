@@ -9,16 +9,19 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 )
 
-// Job event types. Type distinguishes a mid-flight output chunk from the
-// single terminal event emitted when the job exits.
+// Job event types. Type distinguishes a mid-flight output chunk from a
+// periodic update and from the single terminal event emitted when the job
+// exits.
 const (
 	JobEventOutput = "output"
+	JobEventTick   = "tick"
 	JobEventDone   = "done"
 )
 
 // JobEvent reports the lifecycle of a background job to interested
-// observers. Output events carry a coalesced chunk of stdout/stderr; the
-// terminal event carries the exit code and an empty chunk.
+// observers. Output events carry a coalesced chunk of stdout/stderr, tick
+// events mark a periodic update, and the terminal event carries the exit
+// code.
 //
 // JobEvents are a process-local notification stream, not a durable record:
 // they exist so the UI can render a running job's output live and so the

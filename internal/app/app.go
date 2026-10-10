@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/clipboard"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/db"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
@@ -85,6 +86,11 @@ type App struct {
 	// instead of guessing from message finish parts.
 	runCompletions *pubsub.Broker[notify.RunComplete]
 
+	// jobTickPending tracks background jobs whose periodic update is
+	// currently being delivered, so a slow turn cannot accumulate a
+	// backlog of them.
+	jobTickPending *csync.Map[string, struct{}]
+
 	// herdrClient reports agent state to herdr when running inside
 	// a herdr-managed pane. Nil when not in a herdr environment.
 	herdrClient *herdr.Client
@@ -125,6 +131,8 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		tuiWG:              &sync.WaitGroup{},
 		agentNotifications: pubsub.NewBroker[notify.Notification](),
 		runCompletions:     pubsub.NewBroker[notify.RunComplete](),
+
+		jobTickPending: csync.NewMap[string, struct{}](),
 	}
 
 	app.setupEvents()
@@ -824,10 +832,10 @@ func (app *App) subscribeMustDeliver[T any](
 // fed back to the conversation, matching the bash tool's output limit.
 const backgroundJobMaxReportChars = 30000
 
-// subscribeJobCompletions watches for background jobs finishing and reports
-// the result back to the conversation that started the job, so the agent
-// learns the outcome without polling. Jobs that were never left running in
-// the background are ignored.
+// subscribeJobCompletions watches background jobs and reports their output
+// back to the conversation that started them, so the agent learns the
+// outcome without polling. Terminal events are always reported; periodic
+// updates are reported only for jobs started with an update interval.
 func (app *App) subscribeJobCompletions(ctx context.Context) {
 	app.serviceEventsWG.Go(func() {
 		subCh := shell.SubscribeJobEvents(ctx)
@@ -837,10 +845,12 @@ func (app *App) subscribeJobCompletions(ctx context.Context) {
 				if !ok {
 					return
 				}
-				if event.Payload.Type != shell.JobEventDone {
-					continue
+				switch event.Payload.Type {
+				case shell.JobEventDone:
+					app.reportJob(event.Payload, true)
+				case shell.JobEventTick:
+					app.reportJob(event.Payload, false)
 				}
-				app.reportFinishedJob(event.Payload)
 			case <-ctx.Done():
 				return
 			}
@@ -848,17 +858,25 @@ func (app *App) subscribeJobCompletions(ctx context.Context) {
 	})
 }
 
-// reportFinishedJob delivers a finished job's output to its session as a
-// prompt, waking the agent if it is idle or queueing behind an in-flight
-// turn otherwise. It is a no-op for jobs that were not deliberately
+// reportJob delivers a background job's output to its session as a prompt,
+// waking the agent if it is idle or queueing behind an in-flight turn
+// otherwise. When done is false the report is a periodic update, coalesced
+// so a slow turn cannot accumulate a backlog; the terminal report is always
+// delivered. It is a no-op for jobs that were not deliberately
 // backgrounded.
-func (app *App) reportFinishedJob(ev shell.JobEvent) {
+func (app *App) reportJob(ev shell.JobEvent, done bool) {
 	if ev.SessionID == "" || app.AgentCoordinator == nil {
 		return
 	}
 	bg, ok := shell.GetBackgroundShellManager().Get(ev.ShellID)
 	if ok && !bg.NotifyOnDone() {
 		return
+	}
+	if !done {
+		if _, pending := app.jobTickPending.Get(ev.ShellID); pending {
+			return
+		}
+		app.jobTickPending.Set(ev.ShellID, struct{}{})
 	}
 
 	var output string
@@ -877,17 +895,28 @@ func (app *App) reportFinishedJob(ev shell.JobEvent) {
 	if command == "" && ok {
 		command = bg.Command
 	}
-	prompt := fmt.Sprintf(
-		"A background job you started has finished.\n\nCommand: %s\nExit code: %d\n\nOutput:\n%s",
-		command, ev.ExitCode, output,
-	)
+	var prompt string
+	if done {
+		prompt = fmt.Sprintf(
+			"A background job you started has finished.\n\nCommand: %s\nExit code: %d\n\nOutput:\n%s",
+			command, ev.ExitCode, output,
+		)
+	} else {
+		prompt = fmt.Sprintf(
+			"A background job you started is still running.\n\nCommand: %s\n\nOutput so far:\n%s",
+			command, output,
+		)
+	}
 
 	// Run blocks for the whole turn: do it off the event goroutine so the
-	// completion stream keeps flowing. The coordinator queues the prompt
+	// job event stream keeps flowing. The coordinator queues the prompt
 	// behind any in-flight turn.
 	go func() {
+		if !done {
+			defer app.jobTickPending.Del(ev.ShellID)
+		}
 		if _, err := app.AgentCoordinator.Run(app.globalCtx, ev.SessionID, prompt); err != nil {
-			slog.Debug("Reporting finished background job failed", "error", err, "shell_id", ev.ShellID)
+			slog.Debug("Reporting background job failed", "error", err, "shell_id", ev.ShellID)
 		}
 	}()
 }
