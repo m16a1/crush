@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -13,6 +14,7 @@ import (
 	"charm.land/fantasy/providers/bedrock"
 	"charm.land/fantasy/providers/openaicompat"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/discover"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,9 +60,10 @@ func newTestCoordinator(t *testing.T, env fakeEnv, providerID string, providerCf
 	require.NoError(t, err)
 	cfg.Config().Providers.Set(providerID, providerCfg)
 	return &coordinator{
-		cfg:      cfg,
-		sessions: env.sessions,
-		messages: env.messages,
+		cfg:          cfg,
+		sessions:     env.sessions,
+		messages:     env.messages,
+		subAgentRuns: csync.NewMap[string, SessionAgent](),
 	}
 }
 
@@ -822,4 +825,65 @@ func TestCoordinatorSetMainAgent(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, errMainAgentNotFound)
 	})
+}
+
+// TestReportBackgroundJob_RoutesToRunningSubAgent verifies that a
+// background-job report for a live sub-agent session is dispatched to
+// the sessionAgent instance currently executing that sub-agent run,
+// with the interrupt flag set, rather than to the main agent.
+func TestReportBackgroundJob_RoutesToRunningSubAgent(t *testing.T) {
+	const providerID = "test-provider"
+	providerCfg := config.ProviderConfig{ID: providerID}
+
+	env := testEnv(t)
+	coord := newTestCoordinator(t, env, providerID, providerCfg)
+
+	parentSession, err := env.sessions.Create(t.Context(), "Parent")
+	require.NoError(t, err)
+
+	var (
+		mu       sync.Mutex
+		runCalls []SessionAgentCall
+		entered  = make(chan struct{})
+		release  = make(chan struct{})
+	)
+	agent := newMockAgent(providerID, 4096, func(_ context.Context, call SessionAgentCall) (*fantasy.AgentResult, error) {
+		mu.Lock()
+		runCalls = append(runCalls, call)
+		mu.Unlock()
+		if call.Prompt == "task work" {
+			close(entered)
+			<-release
+		}
+		return agentResultWithText("done"), nil
+	})
+
+	subDone := make(chan struct{})
+	go func() {
+		defer close(subDone)
+		_, _ = coord.runSubAgent(t.Context(), subAgentParams{
+			Agent:          agent,
+			SessionID:      parentSession.ID,
+			AgentMessageID: "msg-1",
+			ToolCallID:     "call-1",
+			Prompt:         "task work",
+			SessionTitle:   "Test Session",
+		})
+	}()
+	<-entered
+
+	childSessionID := coord.sessions.CreateAgentToolSessionID("msg-1", "call-1")
+	_, err = coord.ReportBackgroundJob(t.Context(), childSessionID, "background job finished")
+	require.NoError(t, err)
+	close(release)
+	<-subDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, runCalls, 2, "the report must run as its own turn on the sub-agent")
+	report := runCalls[1]
+	assert.Equal(t, childSessionID, report.SessionID)
+	assert.Equal(t, "background job finished", report.Prompt)
+	assert.True(t, report.Interrupt, "the report must carry the interrupt flag")
+	assert.True(t, report.NonInteractive, "the report is an internal continuation")
 }

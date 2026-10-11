@@ -27,6 +27,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/discover"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
@@ -64,6 +65,7 @@ var (
 	errCoderAgentNotConfigured         = errors.New("coder agent not configured")
 	errPlanAgentNotConfigured          = errors.New("plan agent not configured")
 	errMainAgentNotFound               = errors.New("main agent not found")
+	errTaskAgentNotConfigured          = errors.New("task agent not configured")
 	errModelProviderNotConfigured      = errors.New("model provider not configured")
 	errLargeModelNotSelected           = errors.New("large model not selected")
 	errSmallModelNotSelected           = errors.New("small model not selected")
@@ -121,6 +123,14 @@ func isOpenCodeResponsesModel(modelID string) bool {
 type Coordinator interface {
 	SetMainAgent(agentName string) error
 	Run(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error)
+	// ReportBackgroundJob delivers a background-job report to the
+	// conversation that started the job. The report targets the agent
+	// that owns the session — the main agent for top-level sessions, the
+	// task agent for sub-agent sessions. When that session is busy the
+	// report interrupts the in-flight turn (the blocked tool call or
+	// streaming response, never the background job itself) so it is
+	// delivered immediately instead of waiting for the turn to end.
+	ReportBackgroundJob(ctx context.Context, sessionID, prompt string) (*fantasy.AgentResult, error)
 	// RunAccepted runs a call that was already accepted via
 	// BeginAccepted on the fire-and-forget dispatch path. The handle is
 	// the only carrier of accept-state across the backend.runAgent /
@@ -164,6 +174,15 @@ type coordinator struct {
 	mainAgent     SessionAgent
 	mainAgentName string
 	agents        map[string]SessionAgent
+
+	// subAgentRuns tracks, per live sub-agent session, the sessionAgent
+	// instance currently executing it. Session-scoped dispatches that
+	// must reach the owning instance — background-job reports, which
+	// check busy state and interrupt the in-flight run — resolve
+	// through it; the task agent instance is rebuilt whenever tools are
+	// rebuilt, so the coordinator cannot otherwise tell which instance
+	// owns a child session's run.
+	subAgentRuns *csync.Map[string, SessionAgent]
 
 	// Skills discovery results (session-start snapshot).
 	allSkills    []*skills.Skill // Pre-filter: all discovered after dedup.
@@ -217,6 +236,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		notify:       opts.Notify,
 		runComplete:  opts.RunComplete,
 		agents:       make(map[string]SessionAgent),
+		subAgentRuns: csync.NewMap[string, SessionAgent](),
 		allSkills:    allSkills,
 		activeSkills: activeSkills,
 		skillTracker: skillTracker,
@@ -298,12 +318,59 @@ func (c *coordinator) RunAccepted(ctx context.Context, accept *AcceptedRun, sess
 	return c.run(ctx, accept, sessionID, prompt, attachments...)
 }
 
-// run is the shared implementation behind Run and RunAccepted. When
-// accept is non-nil it is threaded onto the SessionAgentCall as
-// Accepted so sessionAgent.Run can consume the accept reservation under
-// dispatchMu; when nil (the in-process/local path) no accept tracking
-// applies.
+// ReportBackgroundJob implements Coordinator. Sub-agent sessions are
+// routed to the task agent: the instance currently executing the
+// sub-agent run when it is still live (so busy checks and interrupts
+// see its state), or a freshly built one when the sub-agent already
+// finished and the report resumes the conversation. Top-level sessions
+// go through the regular run path with the interrupt flag set.
+func (c *coordinator) ReportBackgroundJob(ctx context.Context, sessionID, prompt string) (*fantasy.AgentResult, error) {
+	if err := c.readyWg.Wait(); err != nil {
+		return nil, err
+	}
+	if agent, ok := c.runningSubAgent(sessionID); ok {
+		return c.runSessionTurn(ctx, agent, sessionID, prompt, true)
+	}
+	sess, err := c.sessions.Get(ctx, sessionID)
+	if err == nil && sess.ParentSessionID != "" {
+		agent, buildErr := c.buildTaskAgent(ctx)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		return c.runSessionTurn(ctx, agent, sessionID, prompt, true)
+	}
+	return c.runInterrupting(ctx, sessionID, prompt)
+}
+
+// run is the shared implementation behind Run and RunAccepted.
 func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID string, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
+	return c.runWithOptions(ctx, runOptions{accept: accept}, sessionID, prompt, attachments...)
+}
+
+// runInterrupting is run with the interrupt flag set: when the session
+// is busy the call is queued and the in-flight run is canceled so the
+// queued call is delivered immediately.
+func (c *coordinator) runInterrupting(ctx context.Context, sessionID, prompt string) (*fantasy.AgentResult, error) {
+	return c.runWithOptions(ctx, runOptions{interrupt: true}, sessionID, prompt)
+}
+
+// runOptions carries the variants of the shared run implementation.
+type runOptions struct {
+	// accept, when non-nil, is threaded onto the SessionAgentCall as
+	// Accepted so sessionAgent.Run can consume the accept reservation
+	// under dispatchMu.
+	accept *AcceptedRun
+	// interrupt marks the call as an interrupting delivery (see
+	// SessionAgentCall.Interrupt).
+	interrupt bool
+}
+
+// runWithOptions is the shared implementation behind Run, RunAccepted,
+// and ReportBackgroundJob. When opts.accept is non-nil it is threaded
+// onto the SessionAgentCall as Accepted so sessionAgent.Run can consume
+// the accept reservation under dispatchMu; when nil (the
+// in-process/local path) no accept tracking applies.
+func (c *coordinator) runWithOptions(ctx context.Context, opts runOptions, sessionID string, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
 	if err := c.readyWg.Wait(); err != nil {
 		return nil, err
 	}
@@ -400,7 +467,8 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 			FrequencyPenalty:  freqPenalty,
 			PresencePenalty:   presPenalty,
 			OnComplete:        onComplete,
-			Accepted:          accept,
+			Accepted:          opts.accept,
+			Interrupt:         opts.interrupt,
 			OnAuthRefresh:     c.makeAuthRefreshCallback(providerCfg),
 		})
 	}
@@ -1724,6 +1792,13 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		params.SessionSetup(session.ID)
 	}
 
+	// Track the instance executing this sub-agent run so session-scoped
+	// dispatches (background-job reports) reach the instance that owns
+	// the run's busy state. Sub-agent sessions are keyed by message and
+	// tool call, so a re-run of the same call overwrites the entry.
+	c.trackSubAgentRun(session.ID, params.Agent)
+	defer c.untrackSubAgentRun(session.ID)
+
 	// Get model configuration
 	model := params.Agent.Model()
 	maxTokens := model.CatwalkCfg.DefaultMaxTokens
@@ -1788,6 +1863,82 @@ func subAgentOutput(result *fantasy.AgentResult) string {
 		return ""
 	}
 	return result.Response.Content.Text()
+}
+
+// runSessionTurn runs a single turn on an existing session with the
+// owning agent's model configuration, mirroring how sub-agent turns are
+// dispatched. It is used for background-job reports, which are internal
+// continuations of the conversation that started the job and must not
+// route through the main agent.
+func (c *coordinator) runSessionTurn(ctx context.Context, agent SessionAgent, sessionID, prompt string, interrupt bool) (*fantasy.AgentResult, error) {
+	model := agent.Model()
+	maxTokens := model.CatwalkCfg.DefaultMaxTokens
+	if model.ModelCfg.MaxTokens != 0 {
+		maxTokens = model.ModelCfg.MaxTokens
+	}
+	providerCfg, ok := c.cfg.Config().Providers.Get(model.ModelCfg.Provider)
+	if !ok {
+		return nil, errModelProviderNotConfigured
+	}
+	if err := c.refreshTokenIfExpired(ctx, providerCfg); err != nil {
+		slog.Error("Failed to refresh OAuth2 token. Proceeding with existing token.", "error", err)
+	}
+	return agent.Run(ctx, SessionAgentCall{
+		SessionID:        sessionID,
+		Prompt:           prompt,
+		MaxOutputTokens:  maxTokens,
+		ProviderOptions:  getProviderOptions(model, providerCfg),
+		Temperature:      model.ModelCfg.Temperature,
+		TopP:             model.ModelCfg.TopP,
+		TopK:             callTopK(providerCfg, model.ModelCfg.TopK),
+		FrequencyPenalty: model.ModelCfg.FrequencyPenalty,
+		PresencePenalty:  model.ModelCfg.PresencePenalty,
+		NonInteractive:   true,
+		Interrupt:        interrupt,
+		OnAuthRefresh:    c.makeAuthRefreshCallback(providerCfg),
+	})
+}
+
+// buildTaskAgent builds a task sub-agent for direct dispatches that
+// bypass the agent tool, e.g. a background-job report resuming a
+// sub-agent session whose run already ended.
+func (c *coordinator) buildTaskAgent(ctx context.Context) (SessionAgent, error) {
+	agentCfg, ok := c.cfg.Config().Agents[config.AgentTask]
+	if !ok {
+		return nil, errTaskAgentNotConfigured
+	}
+	taskPrompt, err := taskPrompt(prompt.WithWorkingDir(c.cfg.WorkingDir()))
+	if err != nil {
+		return nil, err
+	}
+	return c.buildAgent(ctx, taskPrompt, agentCfg, true)
+}
+
+// trackSubAgentRun records the sessionAgent instance executing a
+// sub-agent session. Nil-safe so tests constructing a bare coordinator
+// keep working.
+func (c *coordinator) trackSubAgentRun(sessionID string, agent SessionAgent) {
+	if c.subAgentRuns == nil {
+		return
+	}
+	c.subAgentRuns.Set(sessionID, agent)
+}
+
+// untrackSubAgentRun removes a sub-agent session's instance entry.
+func (c *coordinator) untrackSubAgentRun(sessionID string) {
+	if c.subAgentRuns == nil {
+		return
+	}
+	c.subAgentRuns.Del(sessionID)
+}
+
+// runningSubAgent returns the instance currently executing a sub-agent
+// session, if any.
+func (c *coordinator) runningSubAgent(sessionID string) (SessionAgent, bool) {
+	if c.subAgentRuns == nil {
+		return nil, false
+	}
+	return c.subAgentRuns.Get(sessionID)
 }
 
 // updateParentSessionCost accumulates the cost from a child session to its parent session.

@@ -828,14 +828,10 @@ func (app *App) subscribeMustDeliver[T any](
 	})
 }
 
-// backgroundJobMaxReportChars bounds how much of a finished job's output is
-// fed back to the conversation, matching the bash tool's output limit.
-const backgroundJobMaxReportChars = 30000
-
-// subscribeJobCompletions watches background jobs and reports their output
-// back to the conversation that started them, so the agent learns the
-// outcome without polling. Terminal events are always reported; periodic
-// updates are reported only for jobs started with an update interval.
+// subscribeJobCompletions watches background jobs and reports their outcome
+// back to the conversation that started them, so the agent learns about it
+// without polling. Terminal events are always reported; periodic updates
+// are reported only for jobs started with an update interval.
 func (app *App) subscribeJobCompletions(ctx context.Context) {
 	app.serviceEventsWG.Go(func() {
 		subCh := shell.SubscribeJobEvents(ctx)
@@ -858,12 +854,17 @@ func (app *App) subscribeJobCompletions(ctx context.Context) {
 	})
 }
 
-// reportJob delivers a background job's output to its session as a prompt,
-// waking the agent if it is idle or queueing behind an in-flight turn
-// otherwise. When done is false the report is a periodic update, coalesced
-// so a slow turn cannot accumulate a backlog; the terminal report is always
-// delivered. It is a no-op for jobs that were not deliberately
-// backgrounded.
+// reportJob delivers a background job's completion or progress to its
+// session as a prompt, waking the agent if it is idle or interrupting an
+// in-flight turn otherwise. When done is false the report is a periodic
+// update, coalesced so a slow turn cannot accumulate a backlog; the
+// terminal report is always delivered. It is a no-op for jobs that were
+// not deliberately backgrounded.
+//
+// The report deliberately carries no command output: it can be very long
+// and would pollute the context window on every update. The model reads
+// the output on demand with the job_output tool, using the shell ID the
+// report includes.
 func (app *App) reportJob(ev shell.JobEvent, done bool) {
 	if ev.SessionID == "" || app.AgentCoordinator == nil {
 		return
@@ -879,18 +880,6 @@ func (app *App) reportJob(ev shell.JobEvent, done bool) {
 		app.jobTickPending.Set(ev.ShellID, struct{}{})
 	}
 
-	var output string
-	if ok {
-		stdout, stderr, _, _ := bg.GetOutput()
-		output = strings.TrimSpace(strings.Join([]string{stdout, stderr}, "\n"))
-	}
-	if len(output) > backgroundJobMaxReportChars {
-		output = output[:backgroundJobMaxReportChars] + "\n… (output truncated)"
-	}
-	if output == "" {
-		output = "(no output)"
-	}
-
 	command := ev.Command
 	if command == "" && ok {
 		command = bg.Command
@@ -898,24 +887,26 @@ func (app *App) reportJob(ev shell.JobEvent, done bool) {
 	var prompt string
 	if done {
 		prompt = fmt.Sprintf(
-			"A background job you started has finished.\n\nCommand: %s\nExit code: %d\n\nOutput:\n%s",
-			command, ev.ExitCode, output,
+			"A background job you started has finished.\n\nCommand: %s\nExit code: %d\nShell ID: %s\n\nUse the job_output tool with this shell ID to read its output.",
+			command, ev.ExitCode, ev.ShellID,
 		)
 	} else {
 		prompt = fmt.Sprintf(
-			"A background job you started is still running.\n\nCommand: %s\n\nOutput so far:\n%s",
-			command, output,
+			"A background job you started is still running.\n\nCommand: %s\nShell ID: %s\n\nUse the job_output tool with this shell ID to read its output so far.",
+			command, ev.ShellID,
 		)
 	}
 
 	// Run blocks for the whole turn: do it off the event goroutine so the
-	// job event stream keeps flowing. The coordinator queues the prompt
-	// behind any in-flight turn.
+	// job event stream keeps flowing. The coordinator delivers the report
+	// to the agent that owns the session and, when that session is busy,
+	// interrupts the in-flight turn so the report is not stuck behind
+	// "Waiting for tool response..." until the turn ends on its own.
 	go func() {
 		if !done {
 			defer app.jobTickPending.Del(ev.ShellID)
 		}
-		if _, err := app.AgentCoordinator.Run(app.globalCtx, ev.SessionID, prompt); err != nil {
+		if _, err := app.AgentCoordinator.ReportBackgroundJob(app.globalCtx, ev.SessionID, prompt); err != nil {
 			slog.Debug("Reporting background job failed", "error", err, "shell_id", ev.ShellID)
 		}
 	}()

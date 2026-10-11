@@ -171,6 +171,9 @@ func (c *recordingCoordinator) UpdateModels(context.Context) error            { 
 func (c *recordingCoordinator) SetMainAgent(string) error                     { return nil }
 func (c *recordingCoordinator) GenerateTitle(context.Context, string, string) {}
 func (c *recordingCoordinator) RegenerateTitle(context.Context, string) error { return nil }
+func (c *recordingCoordinator) ReportBackgroundJob(context.Context, string, string) (*fantasy.AgentResult, error) {
+	return nil, nil
+}
 
 // fullFakeSessions adapts fakeChannelSessions to the full session.Service
 // interface by embedding it; only the channelSessionStore subset is

@@ -100,6 +100,12 @@ var (
 // editors and other tooling have a habit of stripping angle-bracketed words.
 const titleInstructionSuffix = "\n " + "\x3cthink\x3e" + "\n\n" + "\x3c/think\x3e"
 
+// interruptReasonJobReport labels a run canceled so a queued
+// background-job report can be delivered instead of waiting for the run
+// to finish on its own. It is persisted on the interrupted turn so the
+// transcript shows why the activity stopped.
+const interruptReasonJobReport = "Interrupted by a background job notification"
+
 type SessionAgentCall struct {
 	SessionID string
 	// RunID, when non-empty, is the caller-supplied correlator that
@@ -129,6 +135,14 @@ type SessionAgentCall struct {
 	FrequencyPenalty *float64
 	PresencePenalty  *float64
 	NonInteractive   bool
+	// Interrupt, when true and the session is busy, enqueues the call
+	// and immediately cancels the active run so the queued call is
+	// delivered as soon as the interrupted turn unwinds, instead of
+	// waiting for it to finish on its own. Used by background-job
+	// reports, which must reach the model promptly. The interrupted
+	// turn is persisted as canceled with the job-report interrupt
+	// reason; the queue is preserved and handed off normally.
+	Interrupt bool
 	// OnComplete, when non-nil, replaces the default RunComplete
 	// publish path: the inner Run hands the terminal payload to this
 	// callback instead of emitting it on the RunComplete broker. The
@@ -232,6 +246,32 @@ type Model struct {
 // the explicit Del and the function return.
 type activeCancel struct {
 	cancel context.CancelFunc
+	// interruptReason distinguishes a cancel issued to deliver a
+	// queued notification from a user cancellation. It is stored
+	// before cancel fires, so the interrupted run observes it after
+	// the cancellation signal and can label the persisted turn
+	// accordingly. Nil for plain user cancels.
+	interruptReason atomic.Pointer[string]
+}
+
+// interrupt cancels the run, recording reason first so the interrupted
+// run's cleanup can tell the cancellation apart from a user cancel.
+func (ac *activeCancel) interrupt(reason string) {
+	r := reason
+	ac.interruptReason.Store(&r)
+	ac.cancel()
+}
+
+// interrupted reports whether the run was canceled to deliver a queued
+// notification, returning the reason recorded with the interrupt.
+func (ac *activeCancel) interrupted() (string, bool) {
+	if ac == nil {
+		return "", false
+	}
+	if p := ac.interruptReason.Load(); p != nil {
+		return *p, true
+	}
+	return "", false
 }
 
 type sessionAgent struct {
@@ -483,6 +523,15 @@ func (a *sessionAgent) drainQueueForStep(sessionID string) (fold, canceledWithRu
 			}
 			continue
 		}
+		if queued.Interrupt {
+			// An interrupt-flagged call must not be folded into a
+			// step: it exists to interrupt the active run and is
+			// delivered by the turn handoff after that run unwinds.
+			// Folding it here would race the interrupt and leave the
+			// call persisted but unanswered.
+			keep = append(keep, queued)
+			continue
+		}
 		if queued.RunID != "" {
 			keep = append(keep, queued)
 			continue
@@ -727,6 +776,23 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		// back to the default broker publish, which is what existing
 		// subscribers expect.
 		a.enqueueCall(call)
+		if call.Interrupt {
+			// A queued call that must be delivered promptly (e.g. a
+			// background-job report) interrupts the active run: the
+			// in-flight tool call or streaming response is canceled so
+			// the turn unwinds and the queue handoff below delivers
+			// the call. The background job itself is unaffected — it
+			// runs on its own context. Done under the dispatch lock so
+			// the interrupt can only hit the run that was active at
+			// enqueue time, never a run started by that handoff. The
+			// queue is kept and no cancel mark is raised: the
+			// interrupted run hands off to this call instead of
+			// dropping it.
+			if ac, ok := a.activeRequests.Get(call.SessionID); ok && ac != nil {
+				slog.Debug("Interrupting active run to deliver queued call", "session_id", call.SessionID)
+				ac.interrupt(interruptReasonJobReport)
+			}
+		}
 		if call.Accepted != nil {
 			call.Accepted.Close()
 		}
@@ -1207,6 +1273,15 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	if err != nil {
 		isHyper := largeModel.ModelCfg.Provider == hyper.Name
 		isCancelErr := errors.Is(err, context.Canceled)
+		// interrupting reports whether this run was canceled to deliver a
+		// queued notification (see the busy branch in Run) rather than by
+		// a user cancel. The interrupted turn still persists its canceled
+		// state, but control falls through to the queue handoff so the
+		// queued call runs immediately instead of orphaned in the queue.
+		_, interrupting := ac.interrupted()
+		if interrupting && !isCancelErr {
+			interrupting = false
+		}
 		slog.Info("Agent stream returned error",
 			"error", err.Error(),
 			"error_type", fmt.Sprintf("%T", err),
@@ -1225,122 +1300,139 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 					return nil, persistErr
 				}
 			}
-			return result, err
-		}
-		// Persist final state with a context detached from the run
-		// context. The run context (ctx) is derived from the
-		// workspace context, which workspace shutdown cancels before
-		// agent goroutines finish; using ctx here would drop the
-		// final assistant state. WithoutCancel keeps the values
-		// (e.g. session ID) while ignoring cancellation, and a short
-		// timeout bounds the cleanup writes.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cleanupCancel()
-		// Ensure we finish thinking on error to close the reasoning state.
-		currentAssistant.FinishThinking()
-		toolCalls := currentAssistant.ToolCalls()
-		// INFO: we use the cleanup context here because the genCtx has been cancelled.
-		msgs, createErr := a.messages.List(cleanupCtx, currentAssistant.SessionID)
-		if createErr != nil {
-			return nil, createErr
-		}
-		for _, tc := range toolCalls {
-			if !tc.Finished {
-				tc.Finished = true
-				tc.Input = "{}"
-				currentAssistant.AddToolCall(tc)
-				updateErr := a.messages.Update(cleanupCtx, *currentAssistant)
-				if updateErr != nil {
-					return nil, updateErr
-				}
+			if !interrupting {
+				return result, err
 			}
-
-			found := false
-			for _, msg := range msgs {
-				if msg.Role == message.Tool {
-					for _, tr := range msg.ToolResults() {
-						if tr.ToolCallID == tc.ID {
-							found = true
-							break
-						}
-					}
-				}
-				if found {
-					break
-				}
-			}
-			if found {
-				continue
-			}
-			content := "There was an error while executing the tool"
-			if isCancelErr {
-				content = "Error: user cancelled assistant tool calling"
-			}
-			toolResult := message.ToolResult{
-				ToolCallID: tc.ID,
-				Name:       tc.Name,
-				Content:    content,
-				IsError:    true,
-			}
-			_, createErr = a.messages.Create(cleanupCtx, currentAssistant.SessionID, message.CreateMessageParams{
-				Role: message.Tool,
-				Parts: []message.ContentPart{
-					toolResult,
-				},
-			})
+			// Interrupted before the assistant existed. Fall through to
+			// the queue handoff below so the queued call is delivered.
+		} else {
+			// Persist final state with a context detached from the run
+			// context. The run context (ctx) is derived from the
+			// workspace context, which workspace shutdown cancels before
+			// agent goroutines finish; using ctx here would drop the
+			// final assistant state. WithoutCancel keeps the values
+			// (e.g. session ID) while ignoring cancellation, and a short
+			// timeout bounds the cleanup writes.
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cleanupCancel()
+			// Ensure we finish thinking on error to close the reasoning state.
+			currentAssistant.FinishThinking()
+			toolCalls := currentAssistant.ToolCalls()
+			// INFO: we use the cleanup context here because the genCtx has been cancelled.
+			msgs, createErr := a.messages.List(cleanupCtx, currentAssistant.SessionID)
 			if createErr != nil {
 				return nil, createErr
 			}
-		}
-		var fantasyErr *fantasy.Error
-		var providerErr *fantasy.ProviderError
-		var requestTimedOutErr *requestTimeoutError
-		const defaultTitle = "Provider Error"
-		linkStyle := lipgloss.NewStyle().Foreground(charmtone.Guac).Underline(true)
-		if isCancelErr {
-			currentAssistant.AddFinish(message.FinishReasonCanceled, "User canceled request", "")
-		} else if errors.As(err, &requestTimedOutErr) {
-			// Checked before the provider branches so a deadline our own
-			// request timeout imposed is never reported as a provider error.
-			currentAssistant.AddFinish(message.FinishReasonError, "Request timed out", requestTimedOutErr.userMessage())
-		} else if isHyper && errors.As(err, &providerErr) && providerErr.StatusCode == http.StatusUnauthorized {
-			currentAssistant.AddFinish(message.FinishReasonError, "Unauthorized", `Please re-authenticate with Hyper. You can also run "crush auth" to re-authenticate.`)
-		} else if errors.As(err, &providerErr) {
-			if providerErr.Message == "The requested model is not supported." {
-				url := "https://github.com/settings/copilot/features"
-				link := linkStyle.Hyperlink(url, "id=copilot").Render(url)
-				currentAssistant.AddFinish(
-					message.FinishReasonError,
-					"Copilot model not enabled",
-					fmt.Sprintf("%q is not enabled in Copilot. Go to the following page to enable it. Then, wait 5 minutes before trying again. %s", largeModel.CatwalkCfg.Name, link),
-				)
-			} else {
-				currentAssistant.AddFinish(message.FinishReasonError, cmp.Or(stringext.Capitalize(providerErr.Title), defaultTitle), providerErr.Message)
+			for _, tc := range toolCalls {
+				if !tc.Finished {
+					tc.Finished = true
+					tc.Input = "{}"
+					currentAssistant.AddToolCall(tc)
+					updateErr := a.messages.Update(cleanupCtx, *currentAssistant)
+					if updateErr != nil {
+						return nil, updateErr
+					}
+				}
+
+				found := false
+				for _, msg := range msgs {
+					if msg.Role == message.Tool {
+						for _, tr := range msg.ToolResults() {
+							if tr.ToolCallID == tc.ID {
+								found = true
+								break
+							}
+						}
+					}
+					if found {
+						break
+					}
+				}
+				if found {
+					continue
+				}
+				content := "There was an error while executing the tool"
+				if isCancelErr {
+					content = "Error: user cancelled assistant tool calling"
+					if reason, ok := ac.interrupted(); ok {
+						content = "Error: " + reason
+					}
+				}
+				toolResult := message.ToolResult{
+					ToolCallID: tc.ID,
+					Name:       tc.Name,
+					Content:    content,
+					IsError:    true,
+				}
+				_, createErr = a.messages.Create(cleanupCtx, currentAssistant.SessionID, message.CreateMessageParams{
+					Role: message.Tool,
+					Parts: []message.ContentPart{
+						toolResult,
+					},
+				})
+				if createErr != nil {
+					return nil, createErr
+				}
 			}
-		} else if errors.As(err, &fantasyErr) {
-			currentAssistant.AddFinish(message.FinishReasonError, cmp.Or(stringext.Capitalize(fantasyErr.Title), defaultTitle), fantasyErr.Message)
-		} else if fantasy.IsTransportError(err) {
-			wrapped := fantasy.NewTransportError(err)
-			currentAssistant.AddFinish(message.FinishReasonError, stringext.Capitalize(wrapped.Title), wrapped.Message)
-		} else {
-			currentAssistant.AddFinish(message.FinishReasonError, defaultTitle, err.Error())
+			var fantasyErr *fantasy.Error
+			var providerErr *fantasy.ProviderError
+			var requestTimedOutErr *requestTimeoutError
+			const defaultTitle = "Provider Error"
+			linkStyle := lipgloss.NewStyle().Foreground(charmtone.Guac).Underline(true)
+			if isCancelErr {
+				finishText := "User canceled request"
+				if reason, ok := ac.interrupted(); ok {
+					finishText = reason
+				}
+				currentAssistant.AddFinish(message.FinishReasonCanceled, finishText, "")
+			} else if errors.As(err, &requestTimedOutErr) {
+				// Checked before the provider branches so a deadline our own
+				// request timeout imposed is never reported as a provider error.
+				currentAssistant.AddFinish(message.FinishReasonError, "Request timed out", requestTimedOutErr.userMessage())
+			} else if isHyper && errors.As(err, &providerErr) && providerErr.StatusCode == http.StatusUnauthorized {
+				currentAssistant.AddFinish(message.FinishReasonError, "Unauthorized", `Please re-authenticate with Hyper. You can also run "crush auth" to re-authenticate.`)
+			} else if errors.As(err, &providerErr) {
+				if providerErr.Message == "The requested model is not supported." {
+					url := "https://github.com/settings/copilot/features"
+					link := linkStyle.Hyperlink(url, "id=copilot").Render(url)
+					currentAssistant.AddFinish(
+						message.FinishReasonError,
+						"Copilot model not enabled",
+						fmt.Sprintf("%q is not enabled in Copilot. Go to the following page to enable it. Then, wait 5 minutes before trying again. %s", largeModel.CatwalkCfg.Name, link),
+					)
+				} else {
+					currentAssistant.AddFinish(message.FinishReasonError, cmp.Or(stringext.Capitalize(providerErr.Title), defaultTitle), providerErr.Message)
+				}
+			} else if errors.As(err, &fantasyErr) {
+				currentAssistant.AddFinish(message.FinishReasonError, cmp.Or(stringext.Capitalize(fantasyErr.Title), defaultTitle), fantasyErr.Message)
+			} else if fantasy.IsTransportError(err) {
+				wrapped := fantasy.NewTransportError(err)
+				currentAssistant.AddFinish(message.FinishReasonError, stringext.Capitalize(wrapped.Title), wrapped.Message)
+			} else {
+				currentAssistant.AddFinish(message.FinishReasonError, defaultTitle, err.Error())
+			}
+			// Note: we use the cleanup context here because the genCtx has been
+			// cancelled.
+			updateErr := a.messages.Update(cleanupCtx, *currentAssistant)
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			// A channel-originated turn has no caller watching the error, so
+			// tell the channel side something went wrong instead of leaving
+			// the sender hanging. sendChannelReply detaches from the run
+			// context so the notice survives a provider error that tore it down.
+			if channelErrorReplyWanted(call.Channel, err) {
+				a.sendChannelReply(ctx, call,
+					"Something went wrong while handling your message. Please try again.",
+					completedToolCalls)
+			}
+			if !interrupting {
+				return nil, err
+			}
+			// Interrupted to deliver a queued call: fall through to the
+			// queue handoff below, which delivers the queued call as the
+			// next turn instead of leaving it orphaned in the queue.
 		}
-		// Note: we use the cleanup context here because the genCtx has been
-		// cancelled.
-		updateErr := a.messages.Update(cleanupCtx, *currentAssistant)
-		if updateErr != nil {
-			return nil, updateErr
-		}
-		// A channel-originated turn has no caller watching the error, so
-		// tell the channel side something went wrong instead of leaving
-		// the sender hanging. sendChannelReply detaches from the run
-		// context so the notice survives a provider error that tore it down.
-		if channelErrorReplyWanted(call.Channel, err) {
-			a.sendChannelReply(ctx, call,
-				"Something went wrong while handling your message. Please try again.",
-				completedToolCalls)
-		}
-		return nil, err
 	}
 
 	if shouldSummarize {

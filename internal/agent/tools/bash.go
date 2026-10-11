@@ -26,8 +26,8 @@ type BashParams struct {
 	Description         string `json:"description" description:"A brief description of what the command does, try to keep it under 30 characters or so"`
 	Command             string `json:"command" description:"The command to execute"`
 	WorkingDir          string `json:"working_dir,omitempty" description:"The working directory to execute the command in (defaults to current directory)"`
-	RunInBackground     bool   `json:"run_in_background,omitempty" description:"Set to true (boolean) to run this command in the background. Its output is reported back automatically when it finishes; use job_output to read it sooner."`
-	NotifyEvery         int    `json:"notify_every,omitempty" description:"Seconds between automatic output updates while this command runs in the background. Use 0 to stop the updates."`
+	RunInBackground     bool   `json:"run_in_background,omitempty" description:"Set to true (boolean) to run this command in the background. You are notified automatically when it finishes; use job_output to read its output."`
+	NotifyEvery         int    `json:"notify_every,omitempty" description:"Seconds between automatic progress notifications while this command runs in the background. The notification carries no output; read it with job_output. Use 0 to stop the updates."`
 	AutoBackgroundAfter int    `json:"auto_background_after,omitempty" description:"Seconds to wait before automatically moving the command to a background job (default: 60)"`
 }
 

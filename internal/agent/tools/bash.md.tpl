@@ -29,8 +29,9 @@ Common shell builtins and core utils available on Windows.
 <background_execution>
 - Set run_in_background=true to run commands in a separate background shell
 - Returns a shell ID for managing the background process
-- A background command's output is reported back to you automatically when it finishes; no polling needed
-- Set notify_every to also get its output reported back every N seconds while it is still running; set notify_every=0 to stop
+- A background command notifies you automatically when it finishes; no polling needed
+- The notification names the job and its shell ID but carries no output; read the output with job_output
+- Set notify_every to also get a progress notification every N seconds while it is still running; set notify_every=0 to stop
 - Use job_output with wait=true (optionally timeout_ms) only when this turn needs the result before it can continue
 - `sleep` is refused: wait with the tools above instead of stalling the shell
 - Use job_kill tool to terminate a background shell
