@@ -40,16 +40,16 @@ func TestPlanPromptListsConfiguredTools(t *testing.T) {
 	systemPrompt, err := p.Build(context.Background(), "mock", "mock-model", cfg)
 	require.NoError(t, err)
 	require.Contains(t, systemPrompt,
-		"Your available tools are: agent, lsp_symbols, lsp_definition, lsp_call_hierarchy, glob, grep, ls, question, sourcegraph, view.")
+		"Your available tools are: agent, lsp_symbols, lsp_definition, lsp_call_hierarchy, glob, grep, ls, sourcegraph, view.")
 
 	// A tool the user disabled disappears from the advertised list.
-	// (The word "question" still appears elsewhere in the prompt's rules,
+	// (The word "sourcegraph" would appear nowhere else in the prompt,
 	// so assert on the exact generated tools line instead.)
-	cfg.Config().Options.DisabledTools = []string{"question"}
+	cfg.Config().Options.DisabledTools = []string{"sourcegraph"}
 	cfg.SetupAgents()
 	systemPrompt, err = p.Build(context.Background(), "mock", "mock-model", cfg)
 	require.NoError(t, err)
 	require.Contains(t, systemPrompt,
-		"Your available tools are: agent, lsp_symbols, lsp_definition, lsp_call_hierarchy, glob, grep, ls, sourcegraph, view.")
-	require.NotContains(t, systemPrompt, "ls, question,")
+		"Your available tools are: agent, lsp_symbols, lsp_definition, lsp_call_hierarchy, glob, grep, ls, view.")
+	require.NotContains(t, systemPrompt, "ls, sourcegraph,")
 }

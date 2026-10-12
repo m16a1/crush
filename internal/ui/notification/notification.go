@@ -33,7 +33,7 @@ type Kind string
 
 const (
 	// KindInfo is the default for notifications with no stronger outcome,
-	// such as permission and question prompts.
+	// such as permission prompts.
 	KindInfo Kind = "info"
 	// KindSuccess marks a turn that completed without error.
 	KindSuccess Kind = "success"

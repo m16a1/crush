@@ -272,23 +272,6 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Fails(400, 404, 500).
 			Handle(c.handlePostWorkspacePermissionsGrant),
 
-		apigen.Post("/v1/workspaces/{id}/questions/answer").
-			Summary("Answer question batch").
-			Tags("questions").
-			PathParam("id", "Workspace ID").
-			Accepts(proto.QuestionAnswer{}).
-			Responds(proto.QuestionAnswerResponse{}).
-			Fails(400, 404, 500).
-			Handle(c.handlePostWorkspaceQuestionsAnswer),
-
-		apigen.Post("/v1/workspaces/{id}/questions/cancel").
-			Summary("Cancel question batch").
-			Tags("questions").
-			PathParam("id", "Workspace ID").
-			Responds(proto.QuestionAnswerResponse{}).
-			Fails(400, 404, 500).
-			Handle(c.handlePostWorkspaceQuestionsCancel),
-
 		apigen.Get("/v1/workspaces/{id}/agent").
 			Summary("Get agent info").
 			Tags("agent").

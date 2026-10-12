@@ -34,7 +34,6 @@ import (
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
-	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
@@ -58,7 +57,6 @@ type App struct {
 	Messages    message.Service
 	History     history.Service
 	Permissions permission.Service
-	Questions   question.Service
 	FileTracker filetracker.Service
 
 	AgentCoordinator agent.Coordinator
@@ -117,7 +115,6 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		Messages:    messages,
 		History:     files,
 		Permissions: permission.NewPermissionService(store.WorkingDir(), skipPermissionsRequests, allowedTools),
-		Questions:   question.NewService(),
 		FileTracker: filetracker.NewService(q),
 		LSPManager:  lsp.NewManager(store),
 		Skills:      skillsMgr,
@@ -722,8 +719,6 @@ func (app *App) setupEvents() {
 	app.subscribe(ctx, "messages", app.Messages.Subscribe)
 	app.subscribeMustDeliver(ctx, "permissions", app.Permissions.Subscribe)
 	app.subscribeMustDeliver(ctx, "permissions-notifications", app.Permissions.SubscribeNotifications)
-	app.subscribeMustDeliver(ctx, "question-batches", app.Questions.Subscribe)
-	app.subscribeMustDeliver(ctx, "question-notifications", app.Questions.SubscribeNotifications)
 	app.subscribe(ctx, "history", app.History.Subscribe)
 	app.subscribe(ctx, "agent-notifications", app.agentNotifications.Subscribe)
 	app.subscribeMustDeliver(ctx, "run-completions", app.runCompletions.Subscribe)
@@ -922,7 +917,7 @@ func (app *App) InitCoderAgent(ctx context.Context) error {
 }
 
 // InitCoderAgentNonInteractive initializes the coder agent without
-// interactive-only tools (e.g. question).
+// interactive-only behavior.
 func (app *App) InitCoderAgentNonInteractive(ctx context.Context) error {
 	return app.initCoderAgent(ctx, false)
 }
@@ -938,7 +933,6 @@ func (app *App) initCoderAgent(ctx context.Context, interactive bool) error {
 		Sessions:    app.Sessions,
 		Messages:    app.Messages,
 		Permissions: app.Permissions,
-		Questions:   app.Questions,
 		History:     app.History,
 		FileTracker: app.FileTracker,
 		LSPManager:  app.LSPManager,

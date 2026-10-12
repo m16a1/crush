@@ -1134,7 +1134,6 @@ func allToolNames() []string {
 		"glob",
 		"grep",
 		"ls",
-		"question",
 		"sourcegraph",
 		"todos",
 		"view",
@@ -1169,7 +1168,6 @@ func resolvePlanTools(tools []string) []string {
 		"lsp_call_hierarchy",
 		"lsp_definition",
 		"lsp_symbols",
-		"question",
 		"sourcegraph",
 		"view",
 	}

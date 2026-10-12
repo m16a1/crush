@@ -693,38 +693,6 @@ func (c *controllerV1) handlePostWorkspacePermissionsGrant(w http.ResponseWriter
 	jsonEncode(w, proto.PermissionGrantResponse{Resolved: resolved})
 }
 
-// handlePostWorkspaceQuestionsAnswer submits answers for a batch question.
-func (c *controllerV1) handlePostWorkspaceQuestionsAnswer(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	var req proto.QuestionAnswer
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		c.server.logError(r, "Failed to decode request", "error", err)
-		jsonError(w, http.StatusBadRequest, "failed to decode request")
-		return
-	}
-
-	resolved, err := c.backend.AnswerQuestion(id, req)
-	if err != nil {
-		c.handleError(w, r, err)
-		return
-	}
-	jsonEncode(w, proto.QuestionAnswerResponse{Resolved: resolved})
-}
-
-// handlePostWorkspaceQuestionsCancel cancels the pending question
-// batch for a workspace.
-func (c *controllerV1) handlePostWorkspaceQuestionsCancel(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	cancelled, err := c.backend.CancelQuestion(id)
-	if err != nil {
-		c.handleError(w, r, err)
-		return
-	}
-	jsonEncode(w, proto.QuestionAnswerResponse{Resolved: cancelled})
-}
-
 // handlePostWorkspacePermissionsSkip sets whether to skip permission prompts.
 func (c *controllerV1) handlePostWorkspacePermissionsSkip(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

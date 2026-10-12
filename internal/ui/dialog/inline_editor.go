@@ -58,7 +58,7 @@ type CollapsibleInlineEditor interface {
 	DrawCollapsed(scr uv.Screen, area uv.Rectangle)
 
 	// CollapsedHelp returns the help description for returning focus to the
-	// editor, such as "review plan" or "answer questions".
+	// editor, such as "review plan".
 	CollapsedHelp() string
 }
 

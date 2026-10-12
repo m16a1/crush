@@ -28,8 +28,6 @@ const (
 	PayloadTypeSkillsEvent            PayloadType = "skills_event"
 	PayloadTypeRunComplete            PayloadType = "run_complete"
 	PayloadTypeUpdateAvailable        PayloadType = "update_available"
-	PayloadTypeQuestionRequest        PayloadType = "question_batch_request"
-	PayloadTypeQuestionNotification   PayloadType = "question_batch_notification"
 	PayloadTypeJobEvent               PayloadType = "job_event"
 )
 

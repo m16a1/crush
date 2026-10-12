@@ -1,6 +1,6 @@
 # Bugs and suspicious behaviour found while adding tests
 
-These were found while raising test coverage. Bugs 1, 2, 3, 4, 5, 6 and 7a have
+These were found while raising test coverage. Bugs 1, 2, 3, 4, 5 and 6a have
 since been fixed and are covered by tests; the rest are open and are deliberately
 *not* covered by tests. Each open one is recorded here instead, so the behaviour
 stays visible without a green test suite quietly encoding it as intended. Each
@@ -196,134 +196,9 @@ Covered by `TestCreateVersionCounterIsScopedToTheSession` and
 `TestListLatestSessionFilesKeepsEverySessionThatSharesAPath`, both confirmed to
 fail against the old code.
 
-## 3. `question.Answer` / `Cancel` do not clear pending state eagerly
-
-- **Status:** fixed. `Answer` and `Cancel` now claim the batch under the mutex.
-- **Location:** `internal/question/question.go:223-278` (`Ask` setup and teardown),
-  `:282-307` (`Answer`), `:311-336` (`Cancel`)
-
-### Evidence
-
-`Ask` publishes a buffered channel and clears the fields only in a deferred
-func that runs *after* the select returns:
-
-```go
-// internal/question/question.go:247
-s.mu.Lock()
-s.pending = make(chan []Answer, 1)
-s.cancelled = make(chan struct{})
-s.pendingID = req.ID
-s.mu.Unlock()
-
-defer func() {
-	s.mu.Lock()
-	s.pending = nil
-	s.cancelled = nil
-	s.pendingID = ""
-	s.mu.Unlock()
-}()
-```
-
-`Answer` and `Cancel` read the channels but never nil them:
-
-```go
-// internal/question/question.go:275
-func (s *questionService) Answer(answers []Answer) bool {
-	...
-	ch := s.pending
-	...
-	if ch == nil {
-		return false
-	}
-	ch <- answers          // buffered(1): a second call blocks forever
-	...
-}
-
-// internal/question/question.go:298
-func (s *questionService) Cancel() bool {
-	...
-	cancelCh := s.cancelled
-	...
-	if cancelCh == nil {
-		return false
-	}
-	close(cancelCh)        // a second call panics: close of closed channel
-	...
-}
-```
-
-Consequences, all only reachable while `Ask` is still between its select and
-its deferred cleanup:
-
-- Two `Cancel` calls → `panic: close of closed channel`.
-- Two `Answer` calls → the second blocks forever on the buffered channel.
-- `Answer` followed by `Cancel` → `Cancel` returns `true` and fires a second
-  notification even though the question is already resolved.
-
-`Ask`'s deferred cleanup is the only thing that nils these fields, and it runs
-*after* the select returns, so between the resolve and the cleanup every caller
-still sees non-nil state.
-
-### Reachability
-
-The TUI alone cannot double-fire: `QuestionForm.HandleKey` returns `done = true`
-on submit and on cancel, and `UI.Update` nils `activeInline` in that same
-event-loop iteration (`internal/ui/model/ui.go:3182-3184`), so the next key is
-never routed to the form.
-
-But the TUI is **not the only caller**. `crush server`
-(`internal/cmd/server.go`) registers `POST /v1/workspaces/{id}/questions/answer`
-and `.../questions/cancel` (`internal/server/endpoints.go:275-290`), which call
-straight through `internal/backend/question.go:11,34`, and `net/http` runs every
-request on its own goroutine. Two clients — or one client that retries — can hit
-these concurrently. Multiple answering clients are a *designed* scenario: the
-notification broker exists so that "non-answering clients" can dismiss their open
-forms. So this is reachable today, not merely latent.
-
-### Confirmed with probes
-
-Throwaway probes run against the pre-fix code (deleted afterwards; the repo is
-clean):
-
-| Probe | Setup | Observed |
-|---|---|---|
-| A | pending state populated, `Answer` twice | first `true`, second **blocked forever** |
-| B | pending state populated, `Cancel` twice | first `true`, second **panicked: close of closed channel** |
-| C | pending state populated, `Answer` then `Cancel` | `Cancel` returned `true`; **2 notifications** published |
-| D | real pending `Ask` + two concurrent `Cancel` callers | **panic reproduced** on the 22nd iteration |
-
-Probes A-C populate the pending fields directly so the deferred cleanup cannot
-run, which isolates the missing state clearing. Probe D drives the real `Ask` and
-shows the race is reachable rather than an artifact of the setup: the two callers
-interleave between the check and the `close`.
-
-### Fix
-
-`Answer` and `Cancel` now inspect and claim the pending batch under the same
-mutex hold: if a channel is nil they return `false`, otherwise they nil out
-`pending`, `cancelled` and `pendingID` *before* releasing the lock, then do the
-send/close and notification. That makes the check-and-claim atomic, so a second
-caller — sequential or concurrent — sees no pending question and returns `false`.
-
-`Ask` had to change too: it now captures its channels in locals and selects on
-those, not on the struct fields. Clearing the fields in `Answer`/`Cancel` would
-otherwise be able to unset the fields before a racing `Ask` reaches its select,
-leaving it waiting on nil channels. The deferred cleanup stays as a backstop but
-is now guarded by `s.pending == pending`, so a late cleanup cannot clobber a
-newer batch.
-
-Covered by `question_state_test.go`:
-`TestAnswerTwiceResolvesTheBatchOnce`,
-`TestCancelTwiceCancelsTheBatchOnce`,
-`TestCancelAfterAnswerIsANoOp`,
-`TestConcurrentCancelsResolveTheBatchOnce` and
-`TestConcurrentAnswerAndCancelResolveTheBatchOnce`. All five were confirmed to
-fail against the pre-fix code (block, panic, false positive, panic, double
-resolve respectively). The package also passes under `-race`.
-
 ---
 
-## 4. `getGitStatusSummary` reports "Status: clean" outside a git repo
+## 3. `getGitStatusSummary` reports "Status: clean" outside a git repo
 
 - **Status:** fixed. The pipe is gone; a git failure now collapses to `""`.
 - **Location:** `internal/agent/prompt/prompt.go:274-291`
@@ -412,7 +287,7 @@ through, and the list is still capped).
 
 ---
 
-## 5. Rename / usage updates on a missing session fail silently
+## 4. Rename / usage updates on a missing session fail silently
 
 - **Status:** fixed. Zero rows now maps to `session.ErrSessionNotFound`.
 - **Location:**
@@ -512,7 +387,7 @@ layer.
 
 ---
 
-## 6. `UpdateSessionTitleAndUsage` adds to token columns that are gauges
+## 5. `UpdateSessionTitleAndUsage` adds to token columns that are gauges
 
 - **Status:** fixed. Title write no longer touches the token gauges; cost still adds.
 - **Location:**
@@ -621,7 +496,7 @@ against `HEAD` (5-argument call, same gauge setup), which failed with
 `prompt gauge: expected 100, actual 195`.
 ---
 
-## 7. File-history versioning misbehaves on the first touch of a path
+## 6. File-history versioning misbehaves on the first touch of a path
 
 Two candidate defects with one cause: every tool that writes a file hand-rolls
 its own "make sure the path has an initial version" step, and each does it

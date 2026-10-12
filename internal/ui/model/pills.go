@@ -251,7 +251,7 @@ func (m *UI) pillsAreaHeight() int {
 	if !m.hasSession() {
 		return 0
 	}
-	// Suppress pills when an inline editor (e.g. question form) is active
+	// Suppress pills when an inline editor is active
 	// to avoid competing for screen space.
 	if m.activeInline != nil {
 		return 0
@@ -285,7 +285,7 @@ func (m *UI) renderPills() {
 	if !m.hasSession() {
 		return
 	}
-	// Suppress pills when an inline editor (e.g. question form) is active.
+	// Suppress pills when an inline editor is active.
 	if m.activeInline != nil {
 		return
 	}

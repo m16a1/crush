@@ -3,9 +3,9 @@ package model
 import (
 	"testing"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/crush/internal/message"
-	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/ui/attachments"
 	"github.com/charmbracelet/crush/internal/ui/dialog"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -17,6 +17,25 @@ type attachmentClickWorkspace struct {
 }
 
 func (attachmentClickWorkspace) AgentIsReady() bool { return false }
+
+// stubInlineEditor is a minimal dialog.InlineEditor used to make the
+// editor area busy in tests that assert clicks are ignored while an
+// inline editor is active.
+type stubInlineEditor struct{ focused bool }
+
+func (s *stubInlineEditor) HandleKey(tea.KeyPressMsg) (bool, tea.Cmd) {
+	return false, nil
+}
+
+func (s *stubInlineEditor) ShortHelp() []key.Binding { return nil }
+
+func (s *stubInlineEditor) Height(int) int { return 1 }
+
+func (s *stubInlineEditor) Draw(uv.Screen, uv.Rectangle) *tea.Cursor { return nil }
+
+func (s *stubInlineEditor) HeightChanged() bool { return false }
+
+func (s *stubInlineEditor) SetFocused(focused bool) { s.focused = focused }
 
 func newAttachmentClickTestUI(t *testing.T) (*UI, int) {
 	t.Helper()
@@ -44,13 +63,11 @@ func TestAttachmentClickIgnoredWhileInlineEditorIsActive(t *testing.T) {
 	t.Parallel()
 
 	u, removeX := newAttachmentClickTestUI(t)
-	u.openBatchFormDialog(question.Request{
-		Questions: []question.Question{{
-			ID:   "question",
-			Type: question.TypeFreeText,
-			Text: "Question?",
-		}},
-	})
+	u.activeInline = &stubInlineEditor{}
+	u.textarea.Blur()
+	u.focus = uiFocusEditor
+	u.activeInline.SetFocused(true)
+	u.updateLayoutAndSize()
 
 	_, _ = u.Update(tea.MouseClickMsg(tea.Mouse{
 		X:      u.layout.editor.Min.X + removeX,

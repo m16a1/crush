@@ -43,7 +43,6 @@ import (
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
-	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
@@ -1210,17 +1209,6 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case pubsub.Event[permission.PermissionNotification]:
 		m.handlePermissionNotification(msg.Payload)
-	case pubsub.Event[question.Request]:
-		m.openBatchFormDialog(msg.Payload)
-		m.chat.ScrollToBottom()
-		if cmd := m.sendNotification(notification.Notification{
-			Title:   "Crush is waiting...",
-			Message: fmt.Sprintf("%d questions need your input", len(msg.Payload.Questions)),
-		}); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	case pubsub.Event[question.Notification]:
-		m.handleQuestionNotification(msg.Payload)
 	case cancelTimerExpiredMsg:
 		m.isCanceling = false
 	case tea.TerminalVersionMsg:
@@ -1359,8 +1347,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case uiChat:
 			// Skip chat edge-scrolling when an inline editor is
-			// active to prevent accidental scrolling while hovering
-			// over question forms or other inline components.
+			// active to prevent accidental scrolling while
+			// hovering over inline components.
 			if m.activeInline == nil || m.focus != uiFocusEditor {
 				if msg.Y <= 0 {
 					m.chat.ScrollBy(-1)
@@ -3359,7 +3347,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Tab always toggles focus between editor and chat, even when
 	// an inline editor is active. This lets users collapse the
-	// question form to view chat.
+	// inline editor to view chat.
 	if m.activeInline != nil && keys.Matches(msg, m.keyMap.Tab) {
 		if m.focus == uiFocusEditor {
 			m.focusActiveInline(uiFocusMain)
@@ -5839,40 +5827,6 @@ func (m *UI) openPermissionsDialog(perm permission.PermissionRequest) tea.Cmd {
 	permDialog := dialog.NewPermissions(m.com, perm, opts...)
 	m.dialog.OpenDialogWithGrace(permDialog)
 	return nil
-}
-
-// openBatchFormDialog activates a tabbed multi-question form in
-// the editor area. Single questions render without tabs or confirm.
-func (m *UI) openBatchFormDialog(batch question.Request) {
-	// Close any existing question form first to prevent stacking.
-	if qf, ok := m.activeInline.(*dialog.QuestionForm); ok && qf != nil {
-		m.activeInline = nil
-	}
-
-	form := dialog.NewQuestionForm(m.com.Styles, batch)
-	form.OnAnswer = func(responses []question.Answer) {
-		m.com.Workspace.QuestionAnswer(responses)
-	}
-	form.OnCancel = func() {
-		m.com.Workspace.QuestionCancel()
-	}
-	m.activeInline = form
-	m.textarea.Blur()
-	m.focus = uiFocusEditor
-	m.activeInline.SetFocused(true)
-	m.updateLayoutAndSize()
-}
-
-// handleQuestionNotification dismisses an open question form when
-// any client resolved the pending batch. Only one question can be
-// pending at a time, so any notification means the current form
-// is stale regardless of BatchID.
-func (m *UI) handleQuestionNotification(_ question.Notification) {
-	if _, ok := m.activeInline.(*dialog.QuestionForm); ok {
-		m.activeInline = nil
-		m.textarea.Focus()
-		m.updateLayoutAndSize()
-	}
 }
 
 // editorContentWidth returns the content width available to the
