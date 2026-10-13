@@ -19,10 +19,6 @@ func (m *UI) programStatus() *tea.ProgramStatus {
 		ps.State = tea.ProgramStateBlocked
 		ps.Kind = tea.ProgramStatusKindPermission
 		ps.Message = "Permission required"
-	case m.hasPendingQuestion():
-		ps.State = tea.ProgramStateBlocked
-		ps.Kind = tea.ProgramStatusKindQuestion
-		ps.Message = "Questions need your input"
 	case m.dialog != nil && m.dialog.ContainsDialog(dialog.AWSSSOID):
 		ps.State = tea.ProgramStateBlocked
 		ps.Kind = tea.ProgramStatusKindAuth
@@ -33,9 +29,4 @@ func (m *UI) programStatus() *tea.ProgramStatus {
 		ps.State = m.turnOutcome
 	}
 	return ps
-}
-
-func (m *UI) hasPendingQuestion() bool {
-	_, ok := m.activeInline.(*dialog.QuestionForm)
-	return ok
 }

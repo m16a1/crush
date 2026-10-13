@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/notify"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
-	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/ui/dialog"
 	"github.com/stretchr/testify/require"
 )
@@ -22,13 +21,8 @@ func TestProgramStatus(t *testing.T) {
 	warmCaches(u, true)
 	require.Equal(t, tea.ProgramStateWorking, u.programStatus().State)
 
-	u.activeInline = dialog.NewQuestionForm(u.com.Styles, question.Request{})
-	ps := u.programStatus()
-	require.Equal(t, tea.ProgramStateBlocked, ps.State)
-	require.Equal(t, tea.ProgramStatusKindQuestion, ps.Kind)
-
 	u.dialog.OpenDialogWithGrace(dialog.NewPermissions(u.com, permission.PermissionRequest{ID: "p", ToolName: "bash"}))
-	ps = u.programStatus()
+	ps := u.programStatus()
 	require.Equal(t, tea.ProgramStateBlocked, ps.State)
 	require.Equal(t, tea.ProgramStatusKindPermission, ps.Kind)
 

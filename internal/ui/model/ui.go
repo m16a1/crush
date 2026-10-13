@@ -399,7 +399,8 @@ type UI struct {
 	sidebarDrawLogo         string // logo to render (may differ from sidebarLogo for short heights)
 
 	// Notification state
-	notifyBackend notification.Backend
+	notifyBackend       notification.Backend
+	notifyWindowFocused bool
 	// notificationSoundsMuted disables alert sounds for the current session
 	// without affecting the visual backend or the global configuration.
 	notificationSoundsMuted bool
@@ -553,6 +554,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		lspStates:           make(map[string]workspace.LSPClientInfo),
 		mcpStates:           make(map[string]mcp.ClientInfo),
 		notifyBackend:       notification.NoopBackend{},
+		notifyWindowFocused: true,
 		initialSessionID:    initialSessionID,
 		continueLastSession: continueLast,
 		skillStates:         skills.GetLatestStates(),
