@@ -52,6 +52,12 @@ type AgentEvent struct {
 	// result's failure text travels through Error, like TypeAgentError.
 	AWSSOCommand string `json:"aws_sso_command,omitempty"`
 	AWSSOURL     string `json:"aws_sso_url,omitempty"`
+
+	// Internal marks an event produced by internal plumbing rather than
+	// a user-initiated task (a background-job report turn, or a turn
+	// preempted by one). Clients must not surface desktop notifications
+	// or sounds for it.
+	Internal bool `json:"internal,omitempty"`
 }
 
 // MarshalJSON implements the [json.Marshaler] interface.

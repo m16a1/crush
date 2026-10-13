@@ -2,8 +2,11 @@ package model
 
 import (
 	"runtime"
+	"sync"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/crush/internal/agent/notify"
 	"github.com/stretchr/testify/require"
 
 	"github.com/charmbracelet/crush/internal/config"
@@ -122,4 +125,56 @@ func TestSendNotificationRespectsDisabled(t *testing.T) {
 	ui := newTestUIWithConfig(t, cfg)
 
 	require.Nil(t, ui.sendNotification(notification.Notification{}))
+}
+
+// recordingNotificationBackend captures notification requests so tests can
+// assert on what the UI would surface to the user.
+type recordingNotificationBackend struct {
+	mu   sync.Mutex
+	sent []notification.Notification
+}
+
+func (b *recordingNotificationBackend) Send(n notification.Notification) tea.Cmd {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sent = append(b.sent, n)
+	return nil
+}
+
+func (b *recordingNotificationBackend) recorded() []notification.Notification {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]notification.Notification(nil), b.sent...)
+}
+
+// TestInternalAgentFinishedSkipsDesktopNotification pins the suppression
+// rule for background-job plumbing: a turn-finished event marked Internal
+// (a job-report turn, or a turn preempted by one) must not produce a
+// desktop notification or sound, while a user-driven turn still does. Both
+// must keep driving the busy-state refresh.
+func TestInternalAgentFinishedSkipsDesktopNotification(t *testing.T) {
+	t.Parallel()
+
+	ui := newTestUIWithConfig(t, &config.Config{Options: &config.Options{}})
+	backend := &recordingNotificationBackend{}
+	ui.notifyBackend = backend
+
+	cmd := ui.handleAgentNotification(notify.Notification{
+		Type:      notify.TypeAgentFinished,
+		SessionID: "s1",
+		Internal:  true,
+	})
+	require.NotNil(t, cmd, "internal turns must still drive the busy-state refresh")
+	require.Empty(t, backend.recorded(),
+		"an internal turn completion must not notify the user")
+
+	cmd = ui.handleAgentNotification(notify.Notification{
+		Type:         notify.TypeAgentFinished,
+		SessionID:    "s1",
+		SessionTitle: "my session",
+	})
+	require.NotNil(t, cmd)
+	sent := backend.recorded()
+	require.Len(t, sent, 1, "a user-driven turn completion must notify the user")
+	require.Equal(t, notification.KindSuccess, sent[0].Kind)
 }

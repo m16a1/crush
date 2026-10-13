@@ -5856,11 +5856,16 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 	case notify.TypeAgentFinished:
 		common.StopTurn()
 		m.turnOutcome = tea.ProgramStateDone
-		cmds = append(cmds, m.sendNotification(notification.Notification{
-			Title:   "Crush is waiting...",
-			Message: fmt.Sprintf("Agent's turn completed in \"%s\"", n.SessionTitle),
-			Kind:    notification.KindSuccess,
-		}))
+		// Internal turns (a background-job report, or a turn preempted
+		// by one) are plumbing, not task completion: deliver them to
+		// observers silently, without a desktop notification or sound.
+		if !n.Internal {
+			cmds = append(cmds, m.sendNotification(notification.Notification{
+				Title:   "Crush is waiting...",
+				Message: fmt.Sprintf("Agent's turn completed in \"%s\"", n.SessionTitle),
+				Kind:    notification.KindSuccess,
+			}))
+		}
 		// Show what the stored balance says right away, and fetch again:
 		// the refresh for the turn's last response is only kicked off once
 		// its request finishes, so it may still be in flight here.

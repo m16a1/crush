@@ -185,6 +185,43 @@ func TestAgentErrorToProto_PreservesRunID(t *testing.T) {
 	require.Equal(t, "boom", decoded.Payload.Error.Error())
 }
 
+// TestAgentFinishedToProto_PreservesInternal verifies that the internal
+// marker on turn-finished notifications (background-job report turns and
+// turns preempted by one) survives the SSE envelope, so client-mode TUIs
+// can suppress desktop notifications for plumbing events.
+func TestAgentFinishedToProto_PreservesInternal(t *testing.T) {
+	t.Parallel()
+
+	src := pubsub.Event[notify.Notification]{
+		Type: pubsub.CreatedEvent,
+		Payload: notify.Notification{
+			SessionID: "S",
+			Type:      notify.TypeAgentFinished,
+			Internal:  true,
+		},
+	}
+
+	env := wrapEvent(src)
+	require.NotNil(t, env)
+	require.Equal(t, pubsub.PayloadTypeAgentEvent, env.Type)
+
+	var decoded pubsub.Event[proto.AgentEvent]
+	require.NoError(t, json.Unmarshal(env.Payload, &decoded))
+	require.Equal(t, proto.AgentEventType(notify.TypeAgentFinished), decoded.Payload.Type)
+	require.True(t, decoded.Payload.Internal,
+		"the internal marker must survive the SSE envelope")
+
+	plain := pubsub.Event[notify.Notification]{
+		Type:    pubsub.CreatedEvent,
+		Payload: notify.Notification{SessionID: "S", Type: notify.TypeAgentFinished},
+	}
+	env = wrapEvent(plain)
+	var plainDecoded pubsub.Event[proto.AgentEvent]
+	require.NoError(t, json.Unmarshal(env.Payload, &plainDecoded))
+	require.False(t, plainDecoded.Payload.Internal,
+		"user-driven turns must not be marked internal")
+}
+
 // TestRunCompleteToProto_Error verifies that error- and cancel-shaped
 // RunComplete events round-trip cleanly so clients can distinguish
 // "agent failed" (returns non-zero from `crush run`) from "agent

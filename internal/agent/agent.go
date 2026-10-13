@@ -1470,12 +1470,18 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	cancel()
 
 	// Send notification that agent has finished its turn (skip for
-	// nested/non-interactive sessions).
+	// nested/non-interactive sessions). Turns driven by background-job
+	// reports are internal plumbing: a report turn, and a turn preempted
+	// by one, are marked Internal so UIs suppress desktop notifications
+	// and sounds for them while still treating the event as the
+	// busy-to-idle edge.
+	reason, preemptedByJobReport := ac.interrupted()
 	if !call.NonInteractive && a.notify != nil {
 		a.notify.Publish(pubsub.CreatedEvent, notify.Notification{
 			SessionID:    call.SessionID,
 			SessionTitle: currentSession.Title,
 			Type:         notify.TypeAgentFinished,
+			Internal:     call.Interrupt || (preemptedByJobReport && reason == interruptReasonJobReport),
 		})
 	}
 

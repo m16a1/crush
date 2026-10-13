@@ -42,6 +42,12 @@ type Notification struct {
 	// Message carries the error text for TypeAgentError. Other
 	// notification types ignore it.
 	Message string
+	// Internal marks an event produced by internal plumbing rather than
+	// a user-initiated task: the turn was driven by a background-job
+	// report or was preempted by one. UIs must not surface desktop
+	// notifications or sounds for it; the event still serves as the
+	// busy-to-idle edge observers rely on.
+	Internal bool
 	// AWSSOCommand carries the shell command for TypeAWSSSOAuth.
 	AWSSOCommand string
 	// AWSSOURL carries the SSO verification URL for TypeAWSSSOAuth once it
