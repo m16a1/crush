@@ -8,7 +8,6 @@ import (
 )
 
 func TestRenameUnknownSessionReturnsErrSessionNotFound(t *testing.T) {
-
 	svc := newTestService(t)
 
 	err := svc.Rename(t.Context(), "00000000-0000-4000-8000-000000000000", "renamed")
@@ -16,7 +15,6 @@ func TestRenameUnknownSessionReturnsErrSessionNotFound(t *testing.T) {
 }
 
 func TestUpdateTitleAndUsageUnknownSessionReturnsErrSessionNotFound(t *testing.T) {
-
 	svc := newTestService(t)
 
 	err := svc.UpdateTitleAndUsage(t.Context(), "00000000-0000-4000-8000-000000000000", "titled", 0.5)
@@ -24,7 +22,6 @@ func TestUpdateTitleAndUsageUnknownSessionReturnsErrSessionNotFound(t *testing.T
 }
 
 func TestMutationsOnADeletedSessionReturnErrSessionNotFound(t *testing.T) {
-
 	svc := newTestService(t)
 
 	s, err := svc.Create(t.Context(), "live")
@@ -38,7 +35,6 @@ func TestMutationsOnADeletedSessionReturnErrSessionNotFound(t *testing.T) {
 }
 
 func TestUnresolvedMutationsPublishNothing(t *testing.T) {
-
 	svc := newTestService(t)
 	sub := svc.Subscribe(t.Context())
 

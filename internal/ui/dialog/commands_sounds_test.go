@@ -32,7 +32,7 @@ func TestCommandsOfferNotificationSoundToggle(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			d, err := NewCommands(com, "s1", true, false, false, tt.muted, nil, nil)
+			d, err := NewCommands(com, "s1", true, false, tt.muted, nil, nil)
 			require.NoError(t, err)
 
 			var found bool

@@ -1,13 +1,14 @@
 package dialog
 
 import (
+	"testing"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/crush/internal/workspace"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // commandsWorkspace is a workspace stub with the minimal config the commands
@@ -26,7 +27,7 @@ func newCommandsDialog(t *testing.T, sessionID string, hasSession bool) *Command
 		Workspace: &commandsWorkspace{cfg: config.Config{Options: &config.Options{TUI: &config.TUIOptions{}}}},
 		Styles:    &sty,
 	}
-	dialog, err := NewCommands(com, sessionID, hasSession, false, false, false, nil, nil)
+	dialog, err := NewCommands(com, sessionID, hasSession, false, false, nil, nil)
 	require.NoError(t, err)
 	return dialog
 }

@@ -59,10 +59,6 @@ const (
 
 	SectionSeparator string = "─"
 
-	TodoCompletedIcon  string = "✓"
-	TodoPendingIcon    string = "•"
-	TodoInProgressIcon string = "→"
-
 	ImageIcon  string = "■"
 	TextIcon   string = "≡"
 	SkillIcon  string = "▲"
@@ -393,15 +389,6 @@ type Styles struct {
 		// Agentic fetch styles
 		AgenticFetchPromptTag lipgloss.Style // Agentic fetch prompt tag (green background, bold)
 
-		// Todo styles
-		TodoRatio          lipgloss.Style // Todo ratio (e.g., "2/5")
-		TodoCompletedIcon  lipgloss.Style // Completed todo icon
-		TodoInProgressIcon lipgloss.Style // In-progress todo icon
-		TodoPendingIcon    lipgloss.Style // Pending todo icon
-		TodoStatusNote     lipgloss.Style // " · completed N" / " · starting task" trailing note
-		TodoItem           lipgloss.Style // Default body text for todo list items
-		TodoJustStarted    lipgloss.Style // Text of the just-started todo in tool-call bodies
-
 		// MCP tools
 		MCPName     lipgloss.Style // The mcp name
 		MCPToolName lipgloss.Style // The mcp tool name
@@ -598,7 +585,7 @@ type Styles struct {
 	// Attachments styles
 	Attachments AttachmentStyles
 
-	// Pills styles for todo/queue pills
+	// Pills styles for the queue pill
 	Pills struct {
 		Base               lipgloss.Style // Base pill style with padding
 		Focused            lipgloss.Style // Pill with visible rounded border
@@ -608,10 +595,6 @@ type Styles struct {
 		QueueIconBase      lipgloss.Style // Base style for queue gradient triangles
 		QueueGradFromColor color.Color    // Start color for queue indicator gradient
 		QueueGradToColor   color.Color    // End color for queue indicator gradient
-		TodoLabel          lipgloss.Style // "To-Do" label
-		TodoProgress       lipgloss.Style // Todo ratio (e.g. "2/5")
-		TodoCurrentTask    lipgloss.Style // Current in-progress task name
-		TodoSpinner        lipgloss.Style // Todo spinner style
 		HelpKey            lipgloss.Style // Keystroke hint style
 		HelpText           lipgloss.Style // Help action text style
 		Area               lipgloss.Style // Pills area container

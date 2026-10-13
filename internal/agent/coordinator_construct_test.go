@@ -65,7 +65,6 @@ func newRealCoordinator(t *testing.T) Coordinator {
 }
 
 func TestNewCoordinatorStartsWithTheCoderAgent(t *testing.T) {
-
 	c := newRealCoordinator(t)
 	require.NotNil(t, c)
 
@@ -74,7 +73,6 @@ func TestNewCoordinatorStartsWithTheCoderAgent(t *testing.T) {
 }
 
 func TestCoordinatorLivenessQueriesDelegateToTheCurrentAgent(t *testing.T) {
-
 	c := newRealCoordinator(t)
 
 	require.False(t, c.IsBusy())
@@ -84,7 +82,6 @@ func TestCoordinatorLivenessQueriesDelegateToTheCurrentAgent(t *testing.T) {
 }
 
 func TestCoordinatorCancelAndClearQueueAreSafeWithoutARun(t *testing.T) {
-
 	c := newRealCoordinator(t)
 
 	require.NotPanics(t, func() {
@@ -95,7 +92,6 @@ func TestCoordinatorCancelAndClearQueueAreSafeWithoutARun(t *testing.T) {
 }
 
 func TestBeginAcceptedReservesAHandle(t *testing.T) {
-
 	c := newRealCoordinator(t)
 
 	handle := c.BeginAccepted("session-1")
@@ -103,7 +99,6 @@ func TestBeginAcceptedReservesAHandle(t *testing.T) {
 }
 
 func TestSetMainAgentSwitchesBetweenConfiguredAgents(t *testing.T) {
-
 	c := newRealCoordinator(t)
 
 	require.NoError(t, c.SetMainAgent(config.AgentPlan))
@@ -114,7 +109,6 @@ func TestSetMainAgentSwitchesBetweenConfiguredAgents(t *testing.T) {
 }
 
 func TestRegenerateTitleFailsFastForAnUnknownSession(t *testing.T) {
-
 	c := newRealCoordinator(t)
 
 	err := c.RegenerateTitle(t.Context(), "no-such-session")

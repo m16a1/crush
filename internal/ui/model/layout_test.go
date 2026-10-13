@@ -228,23 +228,18 @@ func TestFollowStaysAtBottomWhenContentGrows(t *testing.T) {
 func TestAutoExpandPillsIfReasonable(t *testing.T) {
 	t.Parallel()
 
-	t.Run("expands when terminal is tall enough and todos exist", func(t *testing.T) {
+	t.Run("expands when terminal is tall enough and the queue has items", func(t *testing.T) {
 		t.Parallel()
 
 		u := newTestUI()
 		u.height = 50
-		u.session = &session.Session{ID: "s1", Todos: []session.Todo{
-			{Status: session.TodoStatusInProgress, Content: "do work"},
-			{Status: session.TodoStatusPending, Content: "do more"},
-		}}
+		u.session = &session.Session{ID: "s1"}
+		u.promptQueue = 2
 
 		u.autoExpandPillsIfReasonable()
 
 		if !u.pillsExpanded {
 			t.Fatal("expected pillsExpanded to be true")
-		}
-		if u.focusedPillSection != pillSectionTodos {
-			t.Fatalf("expected focusedPillSection to be pillSectionTodos, got %d", u.focusedPillSection)
 		}
 	})
 
@@ -253,9 +248,8 @@ func TestAutoExpandPillsIfReasonable(t *testing.T) {
 
 		u := newTestUI()
 		u.height = 30
-		u.session = &session.Session{ID: "s1", Todos: []session.Todo{
-			{Status: session.TodoStatusInProgress, Content: "do work"},
-		}}
+		u.session = &session.Session{ID: "s1"}
+		u.promptQueue = 2
 
 		u.autoExpandPillsIfReasonable()
 
@@ -264,19 +258,17 @@ func TestAutoExpandPillsIfReasonable(t *testing.T) {
 		}
 	})
 
-	t.Run("does not expand when all todos are completed", func(t *testing.T) {
+	t.Run("does not expand when the queue is empty", func(t *testing.T) {
 		t.Parallel()
 
 		u := newTestUI()
 		u.height = 50
-		u.session = &session.Session{ID: "s1", Todos: []session.Todo{
-			{Status: session.TodoStatusCompleted, Content: "done"},
-		}}
+		u.session = &session.Session{ID: "s1"}
 
 		u.autoExpandPillsIfReasonable()
 
 		if u.pillsExpanded {
-			t.Fatal("expected pillsExpanded to be false when all todos are completed")
+			t.Fatal("expected pillsExpanded to be false when the queue is empty")
 		}
 	})
 
@@ -286,33 +278,14 @@ func TestAutoExpandPillsIfReasonable(t *testing.T) {
 		u := newTestUI()
 		u.height = 50
 		u.pillsExpanded = true
-		u.session = &session.Session{ID: "s1", Todos: []session.Todo{
-			{Status: session.TodoStatusInProgress, Content: "do work"},
-		}}
+		u.session = &session.Session{ID: "s1"}
+		u.promptQueue = 2
 		u.updateLayoutAndSize()
 
 		u.autoExpandPillsIfReasonable()
 
 		if !u.pillsExpanded {
 			t.Fatal("expected pillsExpanded to stay true")
-		}
-	})
-
-	t.Run("expands for prompt queue when no todos", func(t *testing.T) {
-		t.Parallel()
-
-		u := newTestUI()
-		u.height = 50
-		u.session = &session.Session{ID: "s1", Todos: []session.Todo{}}
-		u.promptQueue = 2
-
-		u.autoExpandPillsIfReasonable()
-
-		if !u.pillsExpanded {
-			t.Fatal("expected pillsExpanded to be true for prompt queue")
-		}
-		if u.focusedPillSection != pillSectionQueue {
-			t.Fatalf("expected focusedPillSection to be pillSectionQueue, got %d", u.focusedPillSection)
 		}
 	})
 

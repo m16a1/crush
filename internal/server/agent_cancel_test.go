@@ -90,6 +90,7 @@ func (s *runCoordinator) RegenerateTitle(context.Context, string) error { return
 func (s *runCoordinator) ReportBackgroundJob(context.Context, string, string) (*fantasy.AgentResult, error) {
 	return nil, nil
 }
+
 func (s *runCoordinator) SetMainAgent(agentName string) error {
 	s.lastMainAgentSet.Store(agentName)
 	return s.setMainAgentErr

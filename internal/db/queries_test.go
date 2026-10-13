@@ -84,7 +84,6 @@ func TestSessionQueries(t *testing.T) {
 		CompletionTokens: 2,
 		SummaryMessageID: sql.NullString{String: "sum", Valid: true},
 		Cost:             3,
-		Todos:            sql.NullString{String: `[]`, Valid: true},
 		Channel:          sql.NullString{String: "slack", Valid: true},
 	})
 	require.NoError(t, err)

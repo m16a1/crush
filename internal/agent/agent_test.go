@@ -2,7 +2,6 @@ package agent
 
 import (
 	"encoding/base64"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -17,7 +16,6 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
-	"github.com/charmbracelet/crush/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -625,40 +623,6 @@ func TestCoderAgent(t *testing.T) {
 	}
 }
 
-func makeTestTodos(n int) []session.Todo {
-	todos := make([]session.Todo, n)
-	for i := range n {
-		todos[i] = session.Todo{
-			Status:  session.TodoStatusPending,
-			Content: fmt.Sprintf("Task %d: Implement feature with some description that makes it realistic", i),
-		}
-	}
-	return todos
-}
-
-func BenchmarkBuildSummaryPrompt(b *testing.B) {
-	cases := []struct {
-		name     string
-		numTodos int
-	}{
-		{"0todos", 0},
-		{"5todos", 5},
-		{"10todos", 10},
-		{"50todos", 50},
-	}
-
-	for _, tc := range cases {
-		todos := makeTestTodos(tc.numTodos)
-
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			for range b.N {
-				_ = buildSummaryPrompt(todos)
-			}
-		})
-	}
-}
-
 func TestPreparePrompt_FiltersImageAttachments(t *testing.T) {
 	env := testEnv(t)
 	sa := testSessionAgent(env, nil, nil, "test prompt")
@@ -692,10 +656,9 @@ func TestPreparePrompt_FiltersImageAttachments(t *testing.T) {
 	// When supportsImages is false, image attachments should be stripped
 	// from history AND from the files list.
 	history, files := agent.preparePrompt(msgs, false, imageAtt)
-	// First message is the system reminder, second is the user message.
-	require.Len(t, history, 2)
-	require.Len(t, history[1].Content, 1)
-	text, ok := fantasy.AsMessagePart[fantasy.TextPart](history[1].Content[0])
+	require.Len(t, history, 1)
+	require.Len(t, history[0].Content, 1)
+	text, ok := fantasy.AsMessagePart[fantasy.TextPart](history[0].Content[0])
 	require.True(t, ok)
 	require.Contains(t, text.Text, "hello world")
 	require.Contains(t, text.Text, "important notes")
@@ -704,12 +667,12 @@ func TestPreparePrompt_FiltersImageAttachments(t *testing.T) {
 	// When supportsImages is true, image attachments should remain in
 	// history and be included in the files list.
 	history, files = agent.preparePrompt(msgs, true, imageAtt)
-	require.Len(t, history, 2)
-	require.Len(t, history[1].Content, 2)
-	text, ok = fantasy.AsMessagePart[fantasy.TextPart](history[1].Content[0])
+	require.Len(t, history, 1)
+	require.Len(t, history[0].Content, 2)
+	text, ok = fantasy.AsMessagePart[fantasy.TextPart](history[0].Content[0])
 	require.True(t, ok)
 	require.Contains(t, text.Text, "hello world")
-	file, ok := fantasy.AsMessagePart[fantasy.FilePart](history[1].Content[1])
+	file, ok := fantasy.AsMessagePart[fantasy.FilePart](history[0].Content[1])
 	require.True(t, ok)
 	require.Equal(t, "image.png", file.Filename)
 	require.Len(t, files, 1, "new-turn image attachment should be included when model supports images")

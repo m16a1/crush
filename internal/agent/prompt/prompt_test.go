@@ -28,7 +28,6 @@ func testStore(t *testing.T, workingDir string) *config.ConfigStore {
 }
 
 func TestNewPromptAppliesOptions(t *testing.T) {
-
 	fixed := time.Date(2024, 3, 7, 0, 0, 0, 0, time.UTC)
 	p, err := NewPrompt(
 		"test",
@@ -47,7 +46,6 @@ func TestNewPromptAppliesOptions(t *testing.T) {
 }
 
 func TestBuildPropagatesTemplateErrors(t *testing.T) {
-
 	store := testStore(t, t.TempDir())
 
 	_, err := NewPrompt("bad-parse", "{{.Nope", WithWorkingDir(t.TempDir()))
@@ -67,7 +65,6 @@ func TestBuildPropagatesTemplateErrors(t *testing.T) {
 }
 
 func TestProcessFile(t *testing.T) {
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ctx.md")
 	require.NoError(t, os.WriteFile(path, []byte("hello"), 0o644))
@@ -81,7 +78,6 @@ func TestProcessFile(t *testing.T) {
 }
 
 func TestProcessContextPath(t *testing.T) {
-
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.md"), []byte("a"), 0o644))
 	sub := filepath.Join(dir, "nested")
@@ -109,7 +105,6 @@ func TestProcessContextPath(t *testing.T) {
 }
 
 func TestExpandPathResolvesEnvVars(t *testing.T) {
-
 	dir := t.TempDir()
 	store := testStore(t, dir)
 	t.Setenv("PROMPT_TEST_DIR", dir)
@@ -122,7 +117,6 @@ func TestExpandPathResolvesEnvVars(t *testing.T) {
 }
 
 func TestLoadContextFilesDeduplicatesCaseInsensitively(t *testing.T) {
-
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ctx.md"), []byte("x"), 0o644))
 	t.Setenv("PROMPT_DEDUP_DIR", dir)
@@ -140,7 +134,6 @@ func TestLoadContextFilesDeduplicatesCaseInsensitively(t *testing.T) {
 }
 
 func TestIsGitRepo(t *testing.T) {
-
 	require.False(t, isGitRepo(t.TempDir()))
 
 	dir := t.TempDir()
@@ -149,7 +142,6 @@ func TestIsGitRepo(t *testing.T) {
 }
 
 func TestBuildIncludesGitStatusInARepo(t *testing.T) {
-
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -173,7 +165,6 @@ func TestBuildIncludesGitStatusInARepo(t *testing.T) {
 }
 
 func TestGetGitHelpersFailSoftOutsideARepo(t *testing.T) {
-
 	dir := t.TempDir()
 	require.Empty(t, getGitBranch(dir))
 
@@ -184,7 +175,6 @@ func TestGetGitHelpersFailSoftOutsideARepo(t *testing.T) {
 }
 
 func TestPromptDataCollectsContextFilesAndSkills(t *testing.T) {
-
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "local.md"), []byte("local"), 0o644))
 	globalDir := t.TempDir()

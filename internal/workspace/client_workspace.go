@@ -1277,26 +1277,10 @@ func protoToSession(s proto.Session) session.Session {
 		PromptTokens:     s.PromptTokens,
 		CompletionTokens: s.CompletionTokens,
 		Cost:             s.Cost,
-		Todos:            protoToTodos(s.Todos),
 		Channel:          s.Channel,
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
 	}
-}
-
-func protoToTodos(todos []proto.Todo) []session.Todo {
-	if len(todos) == 0 {
-		return nil
-	}
-	out := make([]session.Todo, len(todos))
-	for i, t := range todos {
-		out[i] = session.Todo{
-			Content:    t.Content,
-			Status:     session.TodoStatus(t.Status),
-			ActiveForm: t.ActiveForm,
-		}
-	}
-	return out
 }
 
 func protoToFile(f proto.File) history.File {
@@ -1404,7 +1388,6 @@ func sessionToProto(s session.Session) proto.Session {
 		PromptTokens:     s.PromptTokens,
 		CompletionTokens: s.CompletionTokens,
 		Cost:             s.Cost,
-		Todos:            todosToProto(s.Todos),
 		Channel:          s.Channel,
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
@@ -1429,21 +1412,6 @@ func protoToSkillStates(in []proto.SkillState) []*skills.SkillState {
 			state.Err = errors.New(s.Error)
 		}
 		out[i] = state
-	}
-	return out
-}
-
-func todosToProto(todos []session.Todo) []proto.Todo {
-	if len(todos) == 0 {
-		return nil
-	}
-	out := make([]proto.Todo, len(todos))
-	for i, t := range todos {
-		out[i] = proto.Todo{
-			Content:    t.Content,
-			Status:     string(t.Status),
-			ActiveForm: t.ActiveForm,
-		}
 	}
 	return out
 }

@@ -19,7 +19,6 @@ func skipWithoutGit(t *testing.T) {
 }
 
 func TestGetGitStatusSummaryDoesNotReportCleanWhenGitFails(t *testing.T) {
-
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
@@ -30,7 +29,6 @@ func TestGetGitStatusSummaryDoesNotReportCleanWhenGitFails(t *testing.T) {
 }
 
 func TestGetGitStatusSummaryDoesNotReportCleanForABrokenWorktreePointer(t *testing.T) {
-
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /does/not/exist\n"), 0o644))
 
@@ -41,7 +39,6 @@ func TestGetGitStatusSummaryDoesNotReportCleanForABrokenWorktreePointer(t *testi
 }
 
 func TestBuildDoesNotClaimACleanTreeWhenGitCannotRun(t *testing.T) {
-
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
@@ -55,7 +52,6 @@ func TestBuildDoesNotClaimACleanTreeWhenGitCannotRun(t *testing.T) {
 }
 
 func TestGetGitStatusSummaryReportsUncommittedChanges(t *testing.T) {
-
 	skipWithoutGit(t)
 
 	dir := t.TempDir()
@@ -69,7 +65,6 @@ func TestGetGitStatusSummaryReportsUncommittedChanges(t *testing.T) {
 }
 
 func TestGetGitStatusSummaryTruncatesLongOutput(t *testing.T) {
-
 	skipWithoutGit(t)
 
 	dir := t.TempDir()

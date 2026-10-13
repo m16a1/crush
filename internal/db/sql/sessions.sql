@@ -48,7 +48,6 @@ SET
     completion_tokens = ?,
     summary_message_id = ?,
     cost = ?,
-    todos = ?,
     channel = ?
 WHERE id = ?
 RETURNING *;

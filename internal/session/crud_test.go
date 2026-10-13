@@ -48,15 +48,6 @@ func TestHashID(t *testing.T) {
 	require.NotEqual(t, HashID(id), HashID("other"))
 }
 
-func TestHasIncompleteTodos(t *testing.T) {
-	t.Parallel()
-
-	require.False(t, HasIncompleteTodos(nil))
-	require.False(t, HasIncompleteTodos([]Todo{{Status: TodoStatusCompleted}}))
-	require.True(t, HasIncompleteTodos([]Todo{{Status: TodoStatusPending}}))
-	require.True(t, HasIncompleteTodos([]Todo{{Status: TodoStatusCompleted}, {Status: TodoStatusInProgress}}))
-}
-
 func TestAgentToolSessionIDRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -74,29 +65,6 @@ func TestAgentToolSessionIDRoundTrip(t *testing.T) {
 	_, _, ok = svc.ParseAgentToolSessionID("no-separator")
 	require.False(t, ok)
 	require.False(t, svc.IsAgentToolSession("a$$b$$c"))
-}
-
-func TestMarshalUnmarshalTodos(t *testing.T) {
-	t.Parallel()
-
-	data, err := marshalTodos(nil)
-	require.NoError(t, err)
-	require.Empty(t, data)
-
-	todos := []Todo{{Content: "c", Status: TodoStatusPending, ActiveForm: "af"}}
-	data, err = marshalTodos(todos)
-	require.NoError(t, err)
-
-	got, err := unmarshalTodos(data)
-	require.NoError(t, err)
-	require.Equal(t, todos, got)
-
-	empty, err := unmarshalTodos("")
-	require.NoError(t, err)
-	require.Empty(t, empty)
-
-	_, err = unmarshalTodos("{not json")
-	require.Error(t, err)
 }
 
 func TestCreateGetListLifecycle(t *testing.T) {
@@ -213,13 +181,12 @@ func TestDeleteRemovesSessionAndPublishes(t *testing.T) {
 	require.Error(t, svc.Delete(t.Context(), s.ID))
 }
 
-func TestSavePersistsTodosAndSummary(t *testing.T) {
+func TestSavePersistsSummary(t *testing.T) {
 	svc := newTestService(t)
 
 	s, err := svc.Create(t.Context(), "rich")
 	require.NoError(t, err)
 
-	s.Todos = []Todo{{Content: "todo", Status: TodoStatusPending, ActiveForm: "doing"}}
 	s.SummaryMessageID = fmt.Sprintf("summary-%s", s.ID)
 	saved, err := svc.Save(t.Context(), s)
 	require.NoError(t, err)
@@ -227,6 +194,5 @@ func TestSavePersistsTodosAndSummary(t *testing.T) {
 
 	fetched, err := svc.Get(t.Context(), s.ID)
 	require.NoError(t, err)
-	require.Len(t, fetched.Todos, 1)
 	require.Equal(t, s.SummaryMessageID, fetched.SummaryMessageID)
 }

@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,35 +22,11 @@ import (
 // session was deleted underneath them.
 var ErrSessionNotFound = errors.New("session not found")
 
-type TodoStatus string
-
-const (
-	TodoStatusPending    TodoStatus = "pending"
-	TodoStatusInProgress TodoStatus = "in_progress"
-	TodoStatusCompleted  TodoStatus = "completed"
-)
-
 // HashID returns the XXH3 hash of a session ID (UUID) as a hex string.
 func HashID(id string) string {
 	h := xxh3.New()
 	h.WriteString(id)
 	return fmt.Sprintf("%x", h.Sum(nil))
-}
-
-type Todo struct {
-	Content    string     `json:"content"`
-	Status     TodoStatus `json:"status"`
-	ActiveForm string     `json:"active_form"`
-}
-
-// HasIncompleteTodos returns true if there are any non-completed todos.
-func HasIncompleteTodos(todos []Todo) bool {
-	for _, todo := range todos {
-		if todo.Status != TodoStatusCompleted {
-			return true
-		}
-	}
-	return false
 }
 
 type Session struct {
@@ -64,7 +39,6 @@ type Session struct {
 	EstimatedUsage   bool
 	SummaryMessageID string
 	Cost             float64
-	Todos            []Todo
 	Channel          string
 	CreatedAt        int64
 	UpdatedAt        int64
@@ -99,7 +73,7 @@ type service struct {
 	q  *db.Queries
 
 	// Estimated usage stays in memory so fetch-modify-save paths (e.g.,
-	// updating todos or parent-session cost) do not rebuild a session from
+	// updating parent-session cost) do not rebuild a session from
 	// SQLite and incorrectly clear the UI "~" marker.
 	estimatedUsageMu sync.RWMutex
 	estimatedUsage   map[string]bool
@@ -201,11 +175,6 @@ func (s *service) GetLast(ctx context.Context) (Session, error) {
 }
 
 func (s *service) Save(ctx context.Context, session Session) (Session, error) {
-	todosJSON, err := marshalTodos(session.Todos)
-	if err != nil {
-		return Session{}, err
-	}
-
 	dbSession, err := s.q.UpdateSession(ctx, db.UpdateSessionParams{
 		ID:               session.ID,
 		Title:            session.Title,
@@ -216,10 +185,6 @@ func (s *service) Save(ctx context.Context, session Session) (Session, error) {
 			Valid:  session.SummaryMessageID != "",
 		},
 		Cost: session.Cost,
-		Todos: sql.NullString{
-			String: todosJSON,
-			Valid:  todosJSON != "",
-		},
 		Channel: sql.NullString{
 			String: session.Channel,
 			Valid:  session.Channel != "",
@@ -337,10 +302,6 @@ func (s *service) clearEstimatedUsageState(sessionID string) {
 }
 
 func (s *service) fromDBItem(item db.Session) Session {
-	todos, err := unmarshalTodos(item.Todos.String)
-	if err != nil {
-		slog.Error("Failed to unmarshal todos", "session_id", item.ID, "error", err)
-	}
 	return Session{
 		ID:               item.ID,
 		ParentSessionID:  item.ParentSessionID.String,
@@ -350,33 +311,10 @@ func (s *service) fromDBItem(item db.Session) Session {
 		CompletionTokens: item.CompletionTokens,
 		SummaryMessageID: item.SummaryMessageID.String,
 		Cost:             item.Cost,
-		Todos:            todos,
 		Channel:          item.Channel.String,
 		CreatedAt:        item.CreatedAt,
 		UpdatedAt:        item.UpdatedAt,
 	}
-}
-
-func marshalTodos(todos []Todo) (string, error) {
-	if len(todos) == 0 {
-		return "", nil
-	}
-	data, err := json.Marshal(todos)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func unmarshalTodos(data string) ([]Todo, error) {
-	if data == "" {
-		return []Todo{}, nil
-	}
-	var todos []Todo
-	if err := json.Unmarshal([]byte(data), &todos); err != nil {
-		return []Todo{}, err
-	}
-	return todos, nil
 }
 
 // MCPDisabledServers returns the MCP servers disabled for this

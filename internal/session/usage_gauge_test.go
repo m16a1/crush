@@ -7,7 +7,6 @@ import (
 )
 
 func TestUpdateTitleAndUsageLeavesTheTokenGaugesAlone(t *testing.T) {
-
 	svc := newTestService(t)
 
 	s, err := svc.Create(t.Context(), "gauge")
