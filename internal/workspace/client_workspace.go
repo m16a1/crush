@@ -1357,6 +1357,12 @@ func protoToMessage(m proto.Message) message.Message {
 				Output:   v.Output,
 				ExitCode: v.ExitCode,
 			})
+		case proto.GrammarVerdict:
+			msg.Parts = append(msg.Parts, message.GrammarVerdict{
+				Correct:     v.Correct,
+				Corrected:   v.Corrected,
+				Explanation: v.Explanation,
+			})
 		}
 	}
 

@@ -2060,6 +2060,11 @@ func (m *UI) updateSessionMessage(msg message.Message) tea.Cmd {
 			assistantItem.SetMessage(&msg)
 			assistantItem.SetPlanAgent(m.mode == uiInputModePlan)
 		}
+		if userItem, ok := existingItem.(*chat.UserMessageItem); ok {
+			// A user message can gain a grammar police verdict after
+			// submission; refresh the item so the badge appears live.
+			userItem.SetMessage(&msg)
+		}
 	}
 
 	shouldRenderAssistant := chat.ShouldRenderAssistantMessage(&msg)
@@ -2420,6 +2425,26 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 				status = "enabled"
 			}
 			return util.NewInfoMsg("Transparent background " + status)
+		})
+		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionToggleGrammarPolice:
+		cmds = append(cmds, func() tea.Msg {
+			cfg := m.com.Config()
+			if cfg == nil || cfg.Options == nil {
+				return util.ReportError(errors.New("configuration not found"))()
+			}
+
+			newValue := !cfg.Options.GrammarPolice
+			if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.grammar_police", newValue); err != nil {
+				return util.ReportError(err)()
+			}
+			cfg.Options.GrammarPolice = newValue
+
+			status := "disabled"
+			if newValue {
+				status = "enabled"
+			}
+			return util.NewInfoMsg("Grammar police " + status)
 		})
 		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionSwitchTheme:

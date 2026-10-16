@@ -571,6 +571,14 @@ func (c *Commands) defaultCommands() []*CommandItem {
 	}
 	commands = append(commands, NewCommandItem(c.com.Styles, "toggle_mouse", mouseLabel, "", ActionToggleMouseSupport{}))
 
+	// Add grammar police toggle. The label shows the action the toggle
+	// will perform.
+	grammarLabel := "Enable Grammar Police"
+	if cfg != nil && cfg.Options != nil && cfg.Options.GrammarPolice {
+		grammarLabel = "Disable Grammar Police"
+	}
+	commands = append(commands, NewCommandItem(c.com.Styles, "toggle_grammar_police", grammarLabel, "", ActionToggleGrammarPolice{}))
+
 	commands = append(
 		commands,
 		NewCommandItem(c.com.Styles, "quit", "Quit", "ctrl+c", tea.QuitMsg{}).WithAliases("exit"),

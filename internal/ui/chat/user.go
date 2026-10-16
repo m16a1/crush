@@ -95,6 +95,17 @@ func (m *UserMessageItem) RawRender(width int) string {
 		}
 	}
 
+	// The grammar police verdict is appended after submission, so it is
+	// rendered as an addendum to the message it belongs to.
+	if verdict := m.message.GrammarVerdict(); verdict != nil {
+		verdictStr := m.renderGrammarVerdict(verdict, cappedWidth)
+		if content == "" {
+			content = verdictStr
+		} else {
+			content = strings.Join([]string{content, "", verdictStr}, "\n")
+		}
+	}
+
 	height = lipgloss.Height(content)
 	m.setCachedRender(content, cappedWidth, height)
 	return m.renderHighlighted(content, cappedWidth, height)
@@ -171,6 +182,39 @@ func (m *UserMessageItem) renderAttachments(width int) string {
 	// This message is already posted, so the attachment can't be removed;
 	// don't render the remove button.
 	return m.attachments.Render(attachments, false, false, width)
+}
+
+// SetMessage replaces the underlying message and drops the render
+// caches so the next render reflects it. User messages are otherwise
+// immutable, but the grammar police verdict is appended to their parts
+// after submission, so the item must accept that one update.
+func (m *UserMessageItem) SetMessage(msg *message.Message) {
+	m.message = msg
+	*m.cachedMessageItem = cachedMessageItem{}
+	m.Bump()
+}
+
+// renderGrammarVerdict renders the grammar police verdict as an
+// addendum to the message: a green check for correct prose, or a cross
+// with the corrected variant and a short explanation.
+func (m *UserMessageItem) renderGrammarVerdict(v *message.GrammarVerdict, width int) string {
+	var lines []string
+	if v.Correct {
+		lines = []string{"✅ grammar ok"}
+	} else {
+		lines = []string{"❌ grammar"}
+		if v.Corrected != "" {
+			lines = append(lines, "Corrected: "+v.Corrected)
+		}
+		if v.Explanation != "" {
+			lines = append(lines, v.Explanation)
+		}
+	}
+	bodyWidth := width - toolBodyLeftPaddingTotal
+	for i, line := range lines {
+		lines[i] = capLineWidths(line, bodyWidth)
+	}
+	return m.sty.Tool.Body.Render(strings.Join(lines, "\n"))
 }
 
 // HandleKeyEvent implements KeyEventHandler.

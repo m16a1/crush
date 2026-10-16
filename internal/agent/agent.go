@@ -87,6 +87,9 @@ var titlePrompt []byte
 //go:embed templates/summary.md
 var summaryPrompt []byte
 
+//go:embed templates/grammar.md
+var grammarPrompt []byte
+
 // Used to remove <think> tags from generated titles.
 var (
 	thinkTagRegex       = regexp.MustCompile(`(?s)<think>.*?</think>`)
@@ -896,11 +899,19 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		// must not write a replacement for it.
 		userMsgCreated = true
 	} else {
-		_, err = a.createUserMessage(ctx, call)
+		created, err := a.createUserMessage(ctx, call)
 		if err != nil {
 			return nil, err
 		}
 		userMsgCreated = true
+		// Grammar police: a side request fired concurrently with the
+		// turn, carrying only this message's text. It fulfills whenever
+		// the provider gets to it and never interacts with the turn.
+		if grammarWanted(a.cfg, call) {
+			grammarCtx := context.WithoutCancel(ctx)
+			grammarSessionID, grammarMessageID := call.SessionID, created.ID
+			go a.ProofreadUserMessage(grammarCtx, grammarSessionID, grammarMessageID)
+		}
 	}
 
 	// Add the session to the context. The run context (genCtx) and its

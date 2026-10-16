@@ -188,6 +188,16 @@ type ShellCommand struct {
 
 func (ShellCommand) isPart() {}
 
+// GrammarVerdict is the wire form of the grammar police verdict stored on
+// a user message.
+type GrammarVerdict struct {
+	Correct     bool   `json:"correct"`
+	Corrected   string `json:"corrected,omitempty"`
+	Explanation string `json:"explanation,omitempty"`
+}
+
+func (GrammarVerdict) isPart() {}
+
 // MarshalJSON implements the [json.Marshaler] interface.
 func (m Message) MarshalJSON() ([]byte, error) {
 	parts, err := MarshalParts(m.Parts)
@@ -519,6 +529,7 @@ const (
 	toolResultType   partType = "tool_result"
 	finishType       partType = "finish"
 	shellCommandType partType = "shell_command"
+	grammarType      partType = "grammar_verdict"
 )
 
 type partWrapper struct {
@@ -550,6 +561,8 @@ func MarshalParts(parts []ContentPart) ([]byte, error) {
 			typ = finishType
 		case ShellCommand:
 			typ = shellCommandType
+		case GrammarVerdict:
+			typ = grammarType
 		default:
 			return nil, fmt.Errorf("unknown part type: %T", part)
 		}
@@ -627,6 +640,12 @@ func UnmarshalParts(data []byte) ([]ContentPart, error) {
 			parts = append(parts, part)
 		case shellCommandType:
 			part := ShellCommand{}
+			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+				return nil, err
+			}
+			parts = append(parts, part)
+		case grammarType:
+			part := GrammarVerdict{}
 			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
 				return nil, err
 			}

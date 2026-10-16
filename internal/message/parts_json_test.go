@@ -3,6 +3,7 @@ package message
 import (
 	"testing"
 
+	"charm.land/fantasy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +21,7 @@ func TestPartsRoundTrip(t *testing.T) {
 		ToolResult{ToolCallID: "c1", Name: "bash", Content: "out", MIMEType: "text/plain", IsError: true},
 		Finish{Reason: FinishReasonEndTurn, Time: 42, Message: "done"},
 		ShellCommand{Command: "ls -la", Output: "total 0", ExitCode: 0},
+		GrammarVerdict{Correct: false, Corrected: "hello world", Explanation: "misspelled words"},
 	}
 
 	encoded, err := marshalParts(parts)
@@ -28,6 +30,23 @@ func TestPartsRoundTrip(t *testing.T) {
 	decoded, err := unmarshalParts(encoded)
 	require.NoError(t, err)
 	require.Equal(t, parts, decoded)
+}
+
+// TestToAIMessageIgnoresGrammarVerdict pins the annotation contract: a
+// grammar verdict stored on a user message must never reach the model.
+func TestToAIMessageIgnoresGrammarVerdict(t *testing.T) {
+	t.Parallel()
+
+	m := Message{
+		Role: User,
+		Parts: []ContentPart{
+			TextContent{Text: "helo werld"},
+			GrammarVerdict{Correct: false, Corrected: "hello world", Explanation: "misspelled words"},
+		},
+	}
+	got := m.ToAIMessage()
+	require.Len(t, got, 1)
+	require.Equal(t, "helo werld", got[0].Content[0].(fantasy.TextPart).Text)
 }
 
 func TestUnmarshalPartsEdgeCases(t *testing.T) {

@@ -46,7 +46,7 @@ type BashToolRenderContext struct {
 func (b *BashToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string {
 	cappedWidth := cappedMessageWidth(width)
 	if opts.IsPending() {
-		return pendingTool(sty, "Bash", opts.Anim, opts.Compact)
+		return pendingTool(sty, "Job", opts.Anim, opts.Compact)
 	}
 
 	var params tools.BashParams
@@ -82,7 +82,7 @@ func (b *BashToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *
 	// truncated); expansion only controls the output body.
 	headerOpts := *opts
 	headerOpts.ExpandedContent = true
-	header := toolHeader(sty, opts.Status, "Bash", cappedWidth, &headerOpts, toolParams...)
+	header := toolHeader(sty, opts.Status, "Job", cappedWidth, &headerOpts, toolParams...)
 	if opts.Compact {
 		return header
 	}

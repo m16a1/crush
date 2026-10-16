@@ -153,6 +153,32 @@ type ShellCommand struct {
 
 func (ShellCommand) isPart() {}
 
+// GrammarVerdict is the grammar police verdict for the prose in a user
+// message. It is annotation only: it is stored on the message, rendered
+// by the UI, and never sent to the model.
+type GrammarVerdict struct {
+	Correct     bool   `json:"correct"`
+	Corrected   string `json:"corrected,omitempty"`
+	Explanation string `json:"explanation,omitempty"`
+}
+
+func (gv GrammarVerdict) String() string {
+	return gv.Corrected
+}
+
+func (GrammarVerdict) isPart() {}
+
+// GrammarVerdict returns the message's grammar police verdict, or nil
+// when the message has none.
+func (m *Message) GrammarVerdict() *GrammarVerdict {
+	for _, part := range m.Parts {
+		if gv, ok := part.(GrammarVerdict); ok {
+			return &gv
+		}
+	}
+	return nil
+}
+
 // HasShellCommand reports whether the message contains any ShellCommand parts.
 func (m *Message) HasShellCommand() bool {
 	for _, part := range m.Parts {

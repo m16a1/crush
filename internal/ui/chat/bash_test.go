@@ -1,10 +1,12 @@
 package chat
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/x/ansi"
@@ -100,6 +102,49 @@ func TestBashToolMessageItem_OutputDefaultsCollapsed(t *testing.T) {
 
 	require.True(t, bash.ToggleExpanded(), "first toggle should report expanded")
 	require.Contains(t, ansi.Strip(bash.RawRender(120)), "line20")
+}
+
+// TestBashToolMessageItem_AlwaysLabeledJob pins the unified naming: a
+// bash tool call is rendered under the "Job" label whether it ran in
+// the foreground or became a background job, so the same tool never
+// appears under two different names in the chat.
+func TestBashToolMessageItem_AlwaysLabeledJob(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	foreground := message.ToolCall{
+		ID:       "bash1",
+		Name:     "bash",
+		Input:    `{"command":"ls"}`,
+		Finished: true,
+	}
+	out := ansi.Strip((&BashToolRenderContext{}).RenderTool(&sty, 120, &ToolRenderOpts{
+		ToolCall: foreground,
+		Result:   &message.ToolResult{ToolCallID: "bash1", Content: "out"},
+		Status:   ToolStatusSuccess,
+	}))
+	require.Contains(t, out, "Job", "a foreground bash call must be labeled Job")
+	require.NotContains(t, out, "Bash", "the Bash label must not appear in the chat")
+
+	background := message.ToolCall{
+		ID:       "bash2",
+		Name:     "bash",
+		Input:    `{"command":"npm start","run_in_background":true}`,
+		Finished: true,
+	}
+	meta, err := json.Marshal(tools.BashResponseMetadata{
+		Background: true,
+		PID:        4242,
+	})
+	require.NoError(t, err)
+	out = ansi.Strip((&BashToolRenderContext{}).RenderTool(&sty, 120, &ToolRenderOpts{
+		ToolCall: background,
+		Result:   &message.ToolResult{ToolCallID: "bash2", Metadata: string(meta)},
+		Status:   ToolStatusRunning,
+	}))
+	require.Contains(t, out, "Job", "a background bash call must be labeled Job")
+	require.Contains(t, out, "(Start)", "a background bash call keeps its start action")
+	require.NotContains(t, out, "Bash", "the Bash label must not appear in the chat")
 }
 
 // TestToolOutputPlainContent_SingleHiddenLineShown verifies that

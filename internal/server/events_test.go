@@ -53,6 +53,29 @@ func TestMessageToProtoToolResult(t *testing.T) {
 	require.False(t, tr.IsError)
 }
 
+// TestMessageToProtoGrammarVerdict pins the wire translation of the
+// grammar police verdict so client/server sessions keep their badges.
+func TestMessageToProtoGrammarVerdict(t *testing.T) {
+	t.Parallel()
+
+	src := message.Message{
+		ID:   "m1",
+		Role: message.User,
+		Parts: []message.ContentPart{
+			message.TextContent{Text: "helo"},
+			message.GrammarVerdict{Correct: false, Corrected: "hello", Explanation: "misspelled"},
+		},
+	}
+
+	got := messageToProto(src)
+	require.Len(t, got.Parts, 2)
+	gv, ok := got.Parts[1].(proto.GrammarVerdict)
+	require.True(t, ok, "expected proto.GrammarVerdict, got %T", got.Parts[1])
+	require.False(t, gv.Correct)
+	require.Equal(t, "hello", gv.Corrected)
+	require.Equal(t, "misspelled", gv.Explanation)
+}
+
 // TestMCPChannelEventToProto_RoundTrip verifies that a channel push survives
 // the SSE envelope conversion with its type and rendered <channel> body intact,
 // so client/server sessions receive channel events rather than dropping the

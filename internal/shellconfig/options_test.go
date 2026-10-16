@@ -48,6 +48,23 @@ option metrics YES`
 	require.Equal(t, false, opts["disable_metrics"])
 }
 
+func TestOption_GrammarPolice(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := `option grammar-police true`
+	path := filepath.Join(dir, "crushrc")
+
+	jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(script))
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(jsonBytes, &result))
+
+	opts := result["options"].(map[string]any)
+	require.Equal(t, true, opts["grammar_police"])
+}
+
 func TestOption_String(t *testing.T) {
 	t.Parallel()
 
