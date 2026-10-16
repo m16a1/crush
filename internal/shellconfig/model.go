@@ -21,7 +21,7 @@ import (
 //	model large [<provider>/<id>] [--think] [--reasoning-effort L]
 //	    [--max-tokens N] [--temperature F] [--top-p F] [--top-k N]
 //	    [--frequency-penalty F] [--presence-penalty F]
-//	    [--provider-options JSON]
+//	    [--context-window N] [--provider-options JSON]
 //	model small [<provider>/<id>] [...]
 //
 // "add" registers a model on an existing provider (the provider must have
@@ -154,6 +154,7 @@ var modelSelectFlags = []flagSpec{
 	{name: "--top-k", jsonKey: "top_k", kind: flagInt, op: opSet},
 	{name: "--frequency-penalty", jsonKey: "frequency_penalty", kind: flagFloat, op: opSet},
 	{name: "--presence-penalty", jsonKey: "presence_penalty", kind: flagFloat, op: opSet},
+	{name: "--context-window", jsonKey: "context_window", kind: flagInt, op: opSet},
 	{name: "--provider-options", child: "provider_options", kind: flagJSONObject, op: opMergeChild},
 }
 

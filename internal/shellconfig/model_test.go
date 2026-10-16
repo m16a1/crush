@@ -192,3 +192,13 @@ provider rm anthropic`)
 	require.Len(t, models, 1)
 	require.Equal(t, "b", models[0].(map[string]any)["id"])
 }
+
+func TestModelSelectContextWindowOverride(t *testing.T) {
+	t.Parallel()
+
+	result := loadScript(t, `model large openai/gpt-x --context-window 131072`)
+
+	sel := result["models"].(map[string]any)["large"].(map[string]any)
+	require.Equal(t, "gpt-x", sel["model"])
+	require.EqualValues(t, 131072, sel["context_window"])
+}

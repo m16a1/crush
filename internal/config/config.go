@@ -86,6 +86,12 @@ type SelectedModel struct {
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty" jsonschema:"description=Frequency penalty to reduce repetition"`
 	PresencePenalty  *float64 `json:"presence_penalty,omitempty" jsonschema:"description=Presence penalty to increase topic diversity"`
 
+	// ContextWindow overrides the context window size reported by the
+	// provider catalog. Locally served models often have a missing or
+	// wrong catalog value, which silently skips auto-summarization; this
+	// override corrects the thresholds for them.
+	ContextWindow int64 `json:"context_window,omitempty" jsonschema:"description=Override for the context window size reported by the provider catalog,example=131072"`
+
 	// Override provider specific options.
 	ProviderOptions map[string]any `json:"provider_options,omitempty" jsonschema:"description=Additional provider-specific options for the model"`
 }
@@ -525,6 +531,14 @@ type Options struct {
 	DisabledSkills            []string     `json:"disabled_skills,omitempty" jsonschema:"description=List of skill names to disable and hide from the agent,example=crush-config"`
 	RequestTimeout            *int         `json:"request_timeout,omitempty" jsonschema:"description=Timeout in seconds for each LLM API request. Streaming responses are aborted only after this much inactivity\\, so slow but active streams are never killed. 0 disables it\\, negative values are invalid.,default=60,example=120,example=300,example=0"`
 	GrammarPolice             bool         `json:"grammar_police,omitempty" jsonschema:"description=Proofread the user's prose with a side request and badge each message with a grammar verdict,default=false"`
+	// Orchestration enables the plan tool: the main agent authors a DAG
+	// of work nodes that a pure-code supervisor schedules over parallel
+	// sub-agent sessions with verification and restart budgets.
+	Orchestration bool `json:"orchestration,omitempty" jsonschema:"description=Enable supervisor/mastermind orchestration: gives the coder agent the plan tool for DAG-based multi-agent feature work,default=false"`
+	// MaxParallelSubagents caps how many plan nodes run concurrently.
+	// A plan may lower the cap but never raise it. Zero means the
+	// default of 2.
+	MaxParallelSubagents int `json:"max_parallel_subagents,omitempty" jsonschema:"description=Maximum number of concurrent orchestration sub-agent nodes,default=2,example=4"`
 }
 
 // DefaultRequestTimeout bounds each LLM API request when the user has not
@@ -1188,6 +1202,11 @@ func filterSlice(data []string, mask []string, include bool) []string {
 
 func (c *Config) SetupAgents() {
 	allowedTools := resolveAllowedTools(allToolNames(), c.Options.DisabledTools)
+	// The plan tool exists only in orchestration mode, so it is not part
+	// of allToolNames and must be offered explicitly.
+	if c.Options.Orchestration && !slices.Contains(c.Options.DisabledTools, "plan") {
+		allowedTools = append(allowedTools, "plan")
+	}
 
 	agents := map[string]Agent{
 		AgentCoder: {

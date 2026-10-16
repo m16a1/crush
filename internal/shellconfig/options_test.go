@@ -274,3 +274,14 @@ func TestOption_RequestTimeoutInvalid(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expects a number of seconds")
 }
+
+func TestOption_Orchestration(t *testing.T) {
+	t.Parallel()
+
+	result := loadScript(t, `option orchestration true
+option max-parallel-subagents 4`)
+
+	opts := result["options"].(map[string]any)
+	require.Equal(t, true, opts["orchestration"])
+	require.EqualValues(t, 4, opts["max_parallel_subagents"])
+}

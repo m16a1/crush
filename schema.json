@@ -672,6 +672,24 @@
             300,
             0
           ]
+        },
+        "grammar_police": {
+          "type": "boolean",
+          "description": "Proofread the user's prose with a side request and badge each message with a grammar verdict",
+          "default": false
+        },
+        "orchestration": {
+          "type": "boolean",
+          "description": "Enable supervisor/mastermind orchestration: gives the coder agent the plan tool for DAG-based multi-agent feature work",
+          "default": false
+        },
+        "max_parallel_subagents": {
+          "type": "integer",
+          "description": "Maximum number of concurrent orchestration sub-agent nodes",
+          "default": 2,
+          "examples": [
+            4
+          ]
         }
       },
       "additionalProperties": false,
@@ -885,6 +903,13 @@
         "presence_penalty": {
           "type": "number",
           "description": "Presence penalty to increase topic diversity"
+        },
+        "context_window": {
+          "type": "integer",
+          "description": "Override for the context window size reported by the provider catalog",
+          "examples": [
+            131072
+          ]
         },
         "provider_options": {
           "type": "object",

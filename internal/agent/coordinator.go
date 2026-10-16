@@ -169,6 +169,16 @@ type coordinator struct {
 	runComplete pubsub.Publisher[notify.RunComplete]
 	interactive bool
 
+	// baseCtx carries the construction context's values, detached from
+	// its cancellation, for orchestration work that must outlive the
+	// request that created it: worker child runs, verifier children, and
+	// Supervisor wake-ups all derive from it.
+	baseCtx context.Context
+
+	// supervisors holds the orchestration Supervisor per mastermind
+	// session (see supervisorFor).
+	supervisors *csync.Map[string, *Supervisor]
+
 	// agentMu guards mainAgent and mainAgentName: SetMainAgent runs on
 	// HTTP handler goroutines while runs, cancels, and probes read the
 	// current agent from their own goroutines.
@@ -237,6 +247,8 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		runComplete:  opts.RunComplete,
 		agents:       make(map[string]SessionAgent),
 		subAgentRuns: csync.NewMap[string, SessionAgent](),
+		baseCtx:      context.WithoutCancel(ctx),
+		supervisors:  csync.NewMap[string, *Supervisor](),
 		allSkills:    allSkills,
 		activeSkills: activeSkills,
 		skillTracker: skillTracker,
@@ -486,6 +498,11 @@ func (c *coordinator) runWithOptions(ctx context.Context, opts runOptions, sessi
 			ProviderID: model.ModelCfg.Provider,
 		})
 	}
+
+	// Let an orchestration supervisor watching this session react to the
+	// turn's end: a provider-killed turn gets restarted from persisted
+	// plan state instead of taking the epic down with it.
+	c.noteMainRunEnd(sessionID, originalErr)
 
 	if hasLatest && c.runComplete != nil {
 		c.runComplete.PublishMustDeliver(ctx, pubsub.UpdatedEvent, latest)
@@ -920,6 +937,14 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		allTools = append(allTools, agentTool)
 	}
 
+	if slices.Contains(agent.AllowedTools, PlanToolName) && c.cfg.Config().Options.Orchestration {
+		planTool, err := c.planTool()
+		if err != nil {
+			return nil, err
+		}
+		allTools = append(allTools, planTool)
+	}
+
 	if slices.Contains(agent.AllowedTools, tools.AgenticFetchToolName) {
 		agenticFetchTool, err := c.agenticFetchTool(ctx, nil)
 		if err != nil {
@@ -1123,6 +1148,15 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 		CatwalkCfg: *smallCatwalkModel,
 		ModelCfg:   smallModelCfg,
 		FlatRate:   smallProviderCfg.FlatRate,
+	}
+	// A user-configured context window beats the catalog value, so
+	// auto-summarize thresholds work for locally served models whose
+	// catalog entry has a missing or wrong size.
+	if largeModelCfg.ContextWindow > 0 {
+		large.CatwalkCfg.ContextWindow = largeModelCfg.ContextWindow
+	}
+	if smallModelCfg.ContextWindow > 0 {
+		small.CatwalkCfg.ContextWindow = smallModelCfg.ContextWindow
 	}
 
 	return large, small, nil

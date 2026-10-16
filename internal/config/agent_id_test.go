@@ -33,3 +33,15 @@ func TestConfig_AgentIDs(t *testing.T) {
 		assert.Equal(t, AgentPlan, planAgent.ID, "Plan agent ID should be '%s'", AgentPlan)
 	})
 }
+
+func TestConfig_SetupAgentsOrchestrationPlanTool(t *testing.T) {
+	off := &Config{Options: &Options{}}
+	off.SetupAgents()
+	require.NotContains(t, off.Agents[AgentCoder].AllowedTools, "plan")
+
+	on := &Config{Options: &Options{Orchestration: true}}
+	on.SetupAgents()
+	require.Contains(t, on.Agents[AgentCoder].AllowedTools, "plan")
+	// Read-only agents never orchestrate.
+	require.NotContains(t, on.Agents[AgentTask].AllowedTools, "plan")
+}

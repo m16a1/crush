@@ -199,6 +199,7 @@ var optionSpecs = map[string]optionSpec{
 	"auto-lsp":       {jsonKey: "auto_lsp", kind: optBool},
 	"progress":       {jsonKey: "progress", kind: optBool},
 	"grammar-police": {jsonKey: "grammar_police", kind: optBool},
+	"orchestration":  {jsonKey: "orchestration", kind: optBool},
 
 	// Boolean fields exposed positively but stored as their negation.
 	"metrics":              {jsonKey: "disable_metrics", kind: optBool, inverted: true},
@@ -211,8 +212,9 @@ var optionSpecs = map[string]optionSpec{
 	"data-directory": {jsonKey: "data_directory", kind: optString},
 	"initialize-as":  {jsonKey: "initialize_as", kind: optString},
 
-	// Integer fields, in seconds.
-	"request-timeout": {jsonKey: "request_timeout", kind: optInt},
+	// Integer fields, in seconds except where noted.
+	"request-timeout":        {jsonKey: "request_timeout", kind: optInt},
+	"max-parallel-subagents": {jsonKey: "max_parallel_subagents", kind: optInt},
 
 	// List fields. Keys are singular because each call appends one value.
 	"context-path":        {jsonKey: "context_paths", kind: optList},
