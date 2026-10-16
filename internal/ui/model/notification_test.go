@@ -178,3 +178,37 @@ func TestInternalAgentFinishedSkipsDesktopNotification(t *testing.T) {
 	require.Len(t, sent, 1, "a user-driven turn completion must notify the user")
 	require.Equal(t, notification.KindSuccess, sent[0].Kind)
 }
+
+// TestInternalAgentErrorSkipsDesktopNotification extends the suppression
+// rule to failures: a TypeAgentError marked Internal (a background-job
+// report turn that failed) must not produce a desktop notification or
+// sound, while a user-driven turn's failure still does. Both must keep
+// driving the busy-state refresh.
+func TestInternalAgentErrorSkipsDesktopNotification(t *testing.T) {
+	t.Parallel()
+
+	ui := newTestUIWithConfig(t, &config.Config{Options: &config.Options{}})
+	backend := &recordingNotificationBackend{}
+	ui.notifyBackend = backend
+
+	cmd := ui.handleAgentNotification(notify.Notification{
+		Type:      notify.TypeAgentError,
+		SessionID: "s1",
+		Message:   "background-job report failed",
+		Internal:  true,
+	})
+	require.NotNil(t, cmd, "internal turns must still drive the busy-state refresh")
+	require.Empty(t, backend.recorded(),
+		"an internal turn failure must not notify the user")
+
+	cmd = ui.handleAgentNotification(notify.Notification{
+		Type:      notify.TypeAgentError,
+		SessionID: "s1",
+		Message:   "provider exploded",
+	})
+	require.NotNil(t, cmd)
+	sent := backend.recorded()
+	require.Len(t, sent, 1, "a user-driven turn failure must notify the user")
+	require.Equal(t, notification.KindError, sent[0].Kind)
+	require.Equal(t, "provider exploded", sent[0].Message)
+}

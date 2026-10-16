@@ -5875,17 +5875,22 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 		}
 	case notify.TypeAgentError:
 		m.turnOutcome = tea.ProgramStateError
-		message := n.Message
-		if message == "" {
-			message = "Agent's turn failed"
-		} else if runes := []rune(message); len(runes) > maxNotificationMessage {
-			message = string(runes[:maxNotificationMessage]) + "…"
+		// Internal turns are plumbing, so their failures are delivered
+		// silently too: a background-job report that errors is not the
+		// user's task failing.
+		if !n.Internal {
+			message := n.Message
+			if message == "" {
+				message = "Agent's turn failed"
+			} else if runes := []rune(message); len(runes) > maxNotificationMessage {
+				message = string(runes[:maxNotificationMessage]) + "…"
+			}
+			cmds = append(cmds, m.sendNotification(notification.Notification{
+				Title:   "Crush failed",
+				Message: message,
+				Kind:    notification.KindError,
+			}))
 		}
-		cmds = append(cmds, m.sendNotification(notification.Notification{
-			Title:   "Crush failed",
-			Message: message,
-			Kind:    notification.KindError,
-		}))
 		// Terminal edge like TypeAgentFinished; fall through to the
 		// busy/queue refresh below.
 	case notify.TypeReAuthenticate:

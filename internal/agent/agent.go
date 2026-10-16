@@ -1275,13 +1275,17 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		isCancelErr := errors.Is(err, context.Canceled)
 		// interrupting reports whether this run was canceled to deliver a
 		// queued notification (see the busy branch in Run) rather than by
-		// a user cancel. The interrupted turn still persists its canceled
-		// state, but control falls through to the queue handoff so the
-		// queued call runs immediately instead of orphaned in the queue.
+		// a user cancel. Only the delivery path records an interrupt
+		// reason, so the record is authoritative even when the stream
+		// surfaces the cancellation as a wrapped or provider-specific
+		// error rather than a bare context.Canceled: demoting it here
+		// would return before the queue handoff and orphan the queued
+		// call — the report would sit in the queue and the busy-to-idle
+		// notification would never be published, leaving the UI busy. The
+		// interrupted turn still persists its terminal state, and control
+		// falls through to the queue handoff so the queued call runs
+		// immediately instead of orphaned in the queue.
 		_, interrupting := ac.interrupted()
-		if interrupting && !isCancelErr {
-			interrupting = false
-		}
 		slog.Info("Agent stream returned error",
 			"error", err.Error(),
 			"error_type", fmt.Sprintf("%T", err),
