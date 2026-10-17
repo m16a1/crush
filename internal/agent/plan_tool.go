@@ -31,6 +31,9 @@ type PlanNodeInput struct {
 	Files          []string `json:"files,omitempty" description:"Paths this node writes; concurrent writable nodes with overlapping paths are serialized"`
 	Timeout        int      `json:"timeout,omitempty" description:"Watchdog: kill and fail the node after this many seconds of running (0 = no watchdog)"`
 	MaxRestarts    *int     `json:"max_restarts,omitempty" description:"Automatic restarts when the worker dies (default 1) before the node stalls for adjudication"`
+	Model          string   `json:"model,omitempty" description:"Model override for the worker: provider/model, or a bare model id on the current provider; empty inherits the agent model"`
+	Temperature    *float64 `json:"temperature,omitempty" description:"Sampling temperature override for the worker, 0-1; empty inherits the model config"`
+	ContextWindow  int64    `json:"context_window,omitempty" description:"Context window override for the worker's model in tokens, for local models that report no size; 0 inherits"`
 }
 
 // PlanParams is the plan tool input.

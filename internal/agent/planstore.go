@@ -76,6 +76,13 @@ type PlanNode struct {
 	TimeoutSecs    int      `json:"timeout,omitempty"`
 	MaxRestarts    *int     `json:"max_restarts,omitempty"`
 
+	// Per-node worker overrides. An empty model inherits the coder or
+	// task agent's model; a nil temperature and a zero context window
+	// inherit the model config's values.
+	Model         string   `json:"model,omitempty"`
+	Temperature   *float64 `json:"temperature,omitempty"`
+	ContextWindow int64    `json:"context_window,omitempty"`
+
 	State          PlanNodeState `json:"state"`
 	Attempts       int           `json:"attempts,omitempty"`
 	Restarts       int           `json:"restarts,omitempty"`
@@ -94,6 +101,10 @@ func (n *PlanNode) Clone() *PlanNode {
 	cp := *n
 	cp.DependsOn = append([]string(nil), n.DependsOn...)
 	cp.Files = append([]string(nil), n.Files...)
+	if n.Temperature != nil {
+		t := *n.Temperature
+		cp.Temperature = &t
+	}
 	return &cp
 }
 

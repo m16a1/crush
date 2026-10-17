@@ -65,6 +65,9 @@ type supervisorHooks struct {
 	// subPlanComplete is invoked once when a sub-plan finishes; the
 	// coordinator routes it to the parent supervisor as NodeDone.
 	subPlanComplete func(plan *Plan)
+	// globalSlots is the coordinator-wide concurrency cap shared by
+	// all supervisors. Nil means unlimited (tests).
+	globalSlots *slotPool
 }
 
 // nodeRun tracks a live node launch so the watchdog and kill paths can
@@ -72,6 +75,51 @@ type supervisorHooks struct {
 type nodeRun struct {
 	cancel context.CancelFunc
 	timer  *time.Timer
+	// release returns the global concurrency slot taken at launch.
+	release func()
+}
+
+// slotPool is one concurrency cap shared by every Supervisor of a
+// coordinator. Without it, nested plans would multiply the configured
+// parallel limit: a mastermind at 2 slots with 40 chiefs, each allowed
+// 2, would run 80 workers. The pool makes the configured limit global.
+type slotPool struct {
+	mu    sync.Mutex
+	used  int
+	limit func() int
+	// onRelease, when set, is invoked asynchronously after a slot is
+	// freed so other supervisors can retry scheduling nodes they held
+	// back on the global cap.
+	onRelease func()
+}
+
+// tryAcquire takes a slot if the pool is below its limit and returns
+// the release function. A nil limit means unlimited.
+func (p *slotPool) tryAcquire() (func(), bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.limit != nil {
+		if n := p.limit(); n > 0 && p.used >= n {
+			return nil, false
+		}
+	}
+	p.used++
+	return func() {
+		p.mu.Lock()
+		p.used--
+		notify := p.onRelease
+		p.mu.Unlock()
+		if notify != nil {
+			go notify()
+		}
+	}, true
+}
+
+// inUse reports how many slots are currently taken.
+func (p *slotPool) inUse() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.used
 }
 
 // Supervisor is the pure-algorithm orchestration actor: it owns the
@@ -153,15 +201,15 @@ func (s *Supervisor) AddNodes(inputs []PlanNodeInput) error {
 			}
 		}
 	}
-	// Dependencies may reference existing nodes or other nodes in this
-	// same batch.
+	// Dependencies may reference existing nodes, other nodes in this
+	// same batch, or nodes the mastermind will add in a later call.
+	// Forward references let large plans be authored in small tool
+	// calls; a node whose dependency never arrives stays pending and
+	// shows up as "missing dependency" in status and deadlock reports.
 	for _, in := range inputs {
 		for _, dep := range in.DependsOn {
 			if dep == in.ID {
 				return fmt.Errorf("node %q depends on itself", in.ID)
-			}
-			if s.find(dep) == nil && !slices.ContainsFunc(inputs, func(p PlanNodeInput) bool { return p.ID == dep }) {
-				return fmt.Errorf("node %q depends on unknown node %q", in.ID, dep)
 			}
 		}
 	}
@@ -178,6 +226,9 @@ func (s *Supervisor) AddNodes(inputs []PlanNodeInput) error {
 			VerifyCriteria: in.VerifyCriteria,
 			Files:          slices.Clone(in.Files),
 			TimeoutSecs:    in.Timeout,
+			Model:          in.Model,
+			Temperature:    in.Temperature,
+			ContextWindow:  in.ContextWindow,
 			State:          NodePending,
 			UpdatedAt:      s.now(),
 		}
@@ -232,9 +283,6 @@ func (s *Supervisor) UpdateNodes(inputs []PlanNodeInput) error {
 			if dep == in.ID {
 				return fmt.Errorf("node %q depends on itself", in.ID)
 			}
-			if s.find(dep) == nil {
-				return fmt.Errorf("node %q depends on unknown node %q", in.ID, dep)
-			}
 		}
 	}
 	before := make([]*PlanNode, len(inputs))
@@ -273,6 +321,16 @@ func (s *Supervisor) UpdateNodes(inputs []PlanNodeInput) error {
 		if in.MaxRestarts != nil {
 			mr := *in.MaxRestarts
 			n.MaxRestarts = &mr
+		}
+		if strings.TrimSpace(in.Model) != "" {
+			n.Model = in.Model
+		}
+		if in.Temperature != nil {
+			t := *in.Temperature
+			n.Temperature = &t
+		}
+		if in.ContextWindow > 0 {
+			n.ContextWindow = in.ContextWindow
 		}
 		if n.State == NodeStalled {
 			n.State = NodePending
@@ -627,7 +685,17 @@ func (s *Supervisor) scheduleLocked() {
 			if next == nil {
 				break
 			}
-			s.launchLocked(next)
+			// The global pool bounds concurrency across every plan of
+			// this coordinator; when it is exhausted, stop scheduling.
+			var release func()
+			if s.hooks.globalSlots != nil {
+				var ok bool
+				release, ok = s.hooks.globalSlots.tryAcquire()
+				if !ok {
+					break
+				}
+			}
+			s.launchLocked(next, release)
 		}
 	}
 	s.checkBudgetLocked()
@@ -635,12 +703,12 @@ func (s *Supervisor) scheduleLocked() {
 	s.checkCompleteLocked()
 }
 
-func (s *Supervisor) launchLocked(n *PlanNode) {
+func (s *Supervisor) launchLocked(n *PlanNode, release func()) {
 	n.Attempts++
 	n.State = NodeRunning
 	n.ChildSessionID = planChildID(s.plan.SessionID, n.ID, n.Attempts)
 	n.UpdatedAt = s.now()
-	s.running[n.ID] = &nodeRun{}
+	s.running[n.ID] = &nodeRun{release: release}
 	s.saveLocked()
 	s.hooks.launcher.LaunchNode(s, n.Clone(), s.plan.SessionID)
 	if n.TimeoutSecs > 0 {
@@ -694,6 +762,10 @@ func (s *Supervisor) stopRunLocked(nodeID string) {
 		}
 		if run.cancel != nil {
 			run.cancel()
+		}
+		if run.release != nil {
+			run.release()
+			run.release = nil
 		}
 		delete(s.running, nodeID)
 	}
@@ -798,6 +870,16 @@ func (s *Supervisor) allDoneLocked() bool {
 		}
 	}
 	return true
+}
+
+// Kick re-runs scheduling after an external event, such as a global
+// concurrency slot freeing up in another plan. Wakes queued by the
+// resulting invariant checks are flushed as usual.
+func (s *Supervisor) Kick() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scheduleLocked()
+	s.flushWakesSoonLocked()
 }
 
 // Depth returns this plan's level in the supervision tree: 0 for the

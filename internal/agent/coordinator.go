@@ -179,6 +179,11 @@ type coordinator struct {
 	// session (see supervisorFor).
 	supervisors *csync.Map[string, *Supervisor]
 
+	// supervisorSlots is the coordinator-wide cap on concurrent plan
+	// workers, shared by every supervisor so nested plans cannot
+	// multiply the configured parallel limit.
+	supervisorSlots *slotPool
+
 	// agentMu guards mainAgent and mainAgentName: SetMainAgent runs on
 	// HTTP handler goroutines while runs, cancels, and probes read the
 	// current agent from their own goroutines.
@@ -254,6 +259,15 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		skillTracker: skillTracker,
 		interactive:  opts.Interactive,
 	}
+	c.supervisorSlots = &slotPool{
+		limit: func() int {
+			if n := opts.Config.Config().Options.MaxParallelSubagents; n > 0 {
+				return n
+			}
+			return defaultMaxParallelSubagents
+		},
+		onRelease: c.kickSupervisors,
+	}
 
 	agentCfg, ok := opts.Config.Config().Agents[config.AgentCoder]
 	if !ok {
@@ -265,7 +279,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		return nil, err
 	}
 
-	agent, err := c.buildAgent(ctx, coderPrompt, agentCfg, false)
+	agent, err := c.buildAgent(ctx, coderPrompt, agentCfg, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +295,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		return nil, err
 	}
 
-	planAgent, err := c.buildAgent(ctx, planSystemPrompt, planCfg, false)
+	planAgent, err := c.buildAgent(ctx, planSystemPrompt, planCfg, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +359,7 @@ func (c *coordinator) ReportBackgroundJob(ctx context.Context, sessionID, prompt
 	}
 	sess, err := c.sessions.Get(ctx, sessionID)
 	if err == nil && sess.ParentSessionID != "" {
-		agent, buildErr := c.buildTaskAgent(ctx)
+		agent, buildErr := c.buildTaskAgent(ctx, nil)
 		if buildErr != nil {
 			return nil, buildErr
 		}
@@ -871,8 +885,18 @@ func mergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderO
 	return modelOptions, temp, topP, topK, freqPenalty, presPenalty
 }
 
-func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent, isSubAgent bool) (SessionAgent, error) {
-	large, small, err := c.buildAgentModels(ctx, isSubAgent)
+// modelOverrides carries per-node worker overrides resolved from plan
+// node fields: an optional provider/model switch, sampling temperature,
+// and a context window override for models that misreport their size.
+type modelOverrides struct {
+	provider      string
+	model         string
+	temperature   *float64
+	contextWindow int64
+}
+
+func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent, isSubAgent bool, ov *modelOverrides) (SessionAgent, error) {
+	large, small, err := c.buildAgentModels(ctx, isSubAgent, ov)
 	if err != nil {
 		return nil, err
 	}
@@ -1056,7 +1080,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 }
 
 // TODO: when we support multiple agents we need to change this so that we pass in the agent specific model config
-func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Model, Model, error) {
+func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool, ov *modelOverrides) (Model, Model, error) {
 	largeModelCfg, ok := c.cfg.Config().Models[config.SelectedModelTypeLarge]
 	if !ok {
 		return Model{}, Model{}, errLargeModelNotSelected
@@ -1064,6 +1088,25 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 	smallModelCfg, ok := c.cfg.Config().Models[config.SelectedModelTypeSmall]
 	if !ok {
 		return Model{}, Model{}, errSmallModelNotSelected
+	}
+
+	// Per-node overrides apply to the large model only: workers think
+	// with it, while the small model only generates titles and summaries.
+	if ov != nil {
+		if ov.model != "" {
+			provider, id := resolveModelRef(ov.model, largeModelCfg.Provider, func(p string) bool {
+				_, ok := c.cfg.Config().Providers.Get(p)
+				return ok
+			})
+			largeModelCfg.Provider = provider
+			largeModelCfg.Model = id
+		}
+		if ov.temperature != nil {
+			largeModelCfg.Temperature = ov.temperature
+		}
+		if ov.contextWindow > 0 {
+			largeModelCfg.ContextWindow = ov.contextWindow
+		}
 	}
 
 	largeProviderCfg, ok := c.cfg.Config().Providers.Get(largeModelCfg.Provider)
@@ -1591,7 +1634,7 @@ func (c *coordinator) UpdateModels(ctx context.Context) error {
 // given agent from the current config.
 func (c *coordinator) updateAgentModels(ctx context.Context, agent SessionAgent, name string) error {
 	// build the models again so we make sure we get the latest config
-	large, small, err := c.buildAgentModels(ctx, false)
+	large, small, err := c.buildAgentModels(ctx, false, nil)
 	if err != nil {
 		return err
 	}
@@ -1930,7 +1973,7 @@ func (c *coordinator) runSessionTurn(ctx context.Context, agent SessionAgent, se
 // buildTaskAgent builds a task sub-agent for direct dispatches that
 // bypass the agent tool, e.g. a background-job report resuming a
 // sub-agent session whose run already ended.
-func (c *coordinator) buildTaskAgent(ctx context.Context) (SessionAgent, error) {
+func (c *coordinator) buildTaskAgent(ctx context.Context, ov *modelOverrides) (SessionAgent, error) {
 	agentCfg, ok := c.cfg.Config().Agents[config.AgentTask]
 	if !ok {
 		return nil, errTaskAgentNotConfigured
@@ -1939,7 +1982,7 @@ func (c *coordinator) buildTaskAgent(ctx context.Context) (SessionAgent, error) 
 	if err != nil {
 		return nil, err
 	}
-	return c.buildAgent(ctx, taskPrompt, agentCfg, true)
+	return c.buildAgent(ctx, taskPrompt, agentCfg, true, ov)
 }
 
 // trackSubAgentRun records the sessionAgent instance executing a

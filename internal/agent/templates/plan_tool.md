@@ -17,6 +17,20 @@ as done on evidence (verify_cmd exit code and/or a read-only verifier
 child judging your acceptance criteria). Write prompts as if the worker
 has seen none of this conversation.
 
+Authoring large plans: add the nodes in several small calls - at most
+about four nodes per call - instead of one huge call that can exceed
+the output limit and kill the turn. Dependencies may reference nodes
+you have not added yet; those nodes stay pending until the dependency
+exists and is verified. Add missing nodes promptly: a dependency that
+never arrives deadlocks the plan.
+
+Per-node worker overrides: `model` (provider/model, or a bare model id
+on the current provider), `temperature` (0-1), and `context_window`
+(tokens, for local models that report no size). Use them to match the
+worker to its job: a cheap fast model for bulk research nodes, the
+default model for implementation nodes, low temperature for extraction
+and formatting work. Omit a field to inherit the agent's default.
+
 Supervision tree: a node with agent=supervisor does not edit code. It
 authors its own sub-plan through the plan tool and runs it, and the
 node completes only when that sub-plan completes. Use this for genuinely

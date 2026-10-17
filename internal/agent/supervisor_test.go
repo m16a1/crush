@@ -466,3 +466,127 @@ func TestSubPlanStaleAttemptIgnored(t *testing.T) {
 	sup.SupervisorNodeComplete("sv", 99, "sub-plan complete")
 	require.Equal(t, NodeRunning, sup.find("sv").State)
 }
+
+func TestSupervisorForwardDependencies(t *testing.T) {
+	t.Parallel()
+	sup, launcher, _ := testSupervisor(t, 2)
+
+	// A node may depend on a node that does not exist yet: large plans
+	// are authored in several small add calls.
+	late := nodeInput("late", "early")
+	require.NoError(t, sup.AddNodes([]PlanNodeInput{late}))
+	require.Empty(t, launcher.launchedIDs())
+	require.Equal(t, NodePending, sup.find("late").State)
+
+	// Once the dependency exists and is verified, the node launches.
+	require.NoError(t, sup.AddNodes([]PlanNodeInput{nodeInput("early")}))
+	require.Contains(t, launcher.launchedIDs(), "early")
+	sup.NodeDone("early", 1, "done", nil, VerifyEvidence{})
+	require.Contains(t, launcher.launchedIDs(), "late")
+}
+
+func TestSupervisorSelfDependencyStillRejected(t *testing.T) {
+	t.Parallel()
+	sup, _, _ := testSupervisor(t, 2)
+
+	self := nodeInput("a", "a")
+	require.ErrorContains(t, sup.AddNodes([]PlanNodeInput{self}), "depends on itself")
+}
+
+func TestGlobalSlotPoolSharedAcrossSupervisors(t *testing.T) {
+	t.Parallel()
+	var sup1, sup2 *Supervisor
+	pool := &slotPool{
+		limit: func() int { return 1 },
+		// Mirrors the coordinator wiring: a freed slot kicks every
+		// supervisor so a starved plan retries.
+		onRelease: func() {
+			sup1.Kick()
+			sup2.Kick()
+		},
+	}
+	newPooled := func(name string) (*Supervisor, *fakeLauncher) {
+		launcher := &fakeLauncher{}
+		s := newSupervisor(&Plan{SessionID: name}, &planStore{dir: t.TempDir()},
+			supervisorHooks{launcher: launcher, maxParallel: func() int { return 4 }, globalSlots: pool})
+		s.debounce = time.Hour
+		return s, launcher
+	}
+
+	sup1, l1 := newPooled("plan-one")
+	sup2, l2 := newPooled("plan-two")
+
+	require.NoError(t, sup1.AddNodes([]PlanNodeInput{nodeInput("a")}))
+	require.NoError(t, sup2.AddNodes([]PlanNodeInput{nodeInput("b")}))
+
+	// Only one of the two supervisors may run a worker at a time.
+	require.Equal(t, 1, len(l1.launched)+len(l2.launched))
+	require.Equal(t, 1, pool.inUse())
+
+	// Completing the running node frees the global slot; the release
+	// kicks the starved supervisor, which then relaunches. The kick is
+	// asynchronous, hence the poll.
+	if len(l1.launched) == 1 {
+		sup1.NodeDone("a", 1, "done", nil, VerifyEvidence{})
+	} else {
+		sup2.NodeDone("b", 1, "done", nil, VerifyEvidence{})
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(l1.launched)+len(l2.launched) < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, 2, len(l1.launched)+len(l2.launched))
+	require.Equal(t, 1, pool.inUse())
+}
+
+func TestSupervisorWorkerOverrideFields(t *testing.T) {
+	t.Parallel()
+	sup, _, _ := testSupervisor(t, 2)
+
+	temp := 0.2
+	in := nodeInput("a", "not-added-yet")
+	in.Model = "openrouter/qwen/qwen3-coder"
+	in.Temperature = &temp
+	in.ContextWindow = 131072
+	// The forward dependency keeps the node pending so it can be
+	// updated below.
+	require.NoError(t, sup.AddNodes([]PlanNodeInput{in}))
+	require.Equal(t, NodePending, sup.find("a").State)
+
+	n := sup.find("a")
+	require.Equal(t, "openrouter/qwen/qwen3-coder", n.Model)
+	require.NotNil(t, n.Temperature)
+	require.Equal(t, 0.2, *n.Temperature)
+	require.Equal(t, int64(131072), n.ContextWindow)
+
+	// Updates patch the fields; omitted fields stay untouched.
+	upd := PlanNodeInput{ID: "a", Temperature: ptrFloat(0.9)}
+	require.NoError(t, sup.UpdateNodes([]PlanNodeInput{upd}))
+	require.Equal(t, "openrouter/qwen/qwen3-coder", sup.find("a").Model)
+	require.Equal(t, 0.9, *sup.find("a").Temperature)
+	require.Equal(t, int64(131072), sup.find("a").ContextWindow)
+}
+
+func ptrFloat(v float64) *float64 { return &v }
+
+func TestResolveModelRef(t *testing.T) {
+	t.Parallel()
+	providers := map[string]bool{"openrouter": true, "hyper": true}
+	has := func(p string) bool { return providers[p] }
+
+	// A configured provider prefix splits.
+	p, m := resolveModelRef("openrouter/qwen/qwen3-coder", "anthropic", has)
+	require.Equal(t, "openrouter", p)
+	require.Equal(t, "qwen/qwen3-coder", m)
+
+	// An unrecognized prefix is a bare model id on the base provider;
+	// openrouter-style vendor/model ids keep their slashes.
+	p, m = resolveModelRef("qwen/qwen3-coder", "openrouter", has)
+	require.Equal(t, "openrouter", p)
+	require.Equal(t, "qwen/qwen3-coder", m)
+
+	// No slash at all.
+	p, m = resolveModelRef("claude-x", "hyper", has)
+	require.Equal(t, "hyper", p)
+	require.Equal(t, "claude-x", m)
+}

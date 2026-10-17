@@ -31,6 +31,13 @@ Implemented (2026-10-16), gated behind `option orchestration true`:
   only when that sub-plan completes. Pausing or removing a supervisor
   node pauses its whole subtree. Each deeper level must receive a
   strictly simpler task - enforced by doctrine and by the depth cap.
+  Worker completions inside a sub-plan wake that sub-plan's own
+  supervisor session (its "chief"), never the top mastermind; the
+  mastermind hears only about its own nodes.
+- `options.max_parallel_subagents` is a coordinator-wide cap: a shared
+  slot pool bounds concurrent workers across every plan in the tree, so
+  nested plans cannot multiply the limit. A freed slot kicks all
+  supervisors so starved plans retry.
 - Plan screen (TUI, `ctrl+e` or the command palette): full-screen view
   of the current session's plan - node states, attempts, budgets, and
   per-worker statistics (session cost and average output tokens per

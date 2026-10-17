@@ -87,6 +87,7 @@ func (c *coordinator) supervisorFor(sessionID string) (*Supervisor, error) {
 		subPlanComplete: func(p *Plan) {
 			go c.routeSubPlanComplete(p)
 		},
+		globalSlots: c.supervisorSlots,
 	})
 	c.supervisors.Set(sessionID, sup)
 	return sup, nil
@@ -138,6 +139,18 @@ func (l *coordinatorLauncher) VerifyNode(sup *Supervisor, node *PlanNode, mainSe
 	go l.runVerifier(sup, node, mainSessionID, evidence)
 }
 
+// kickSupervisors re-runs scheduling on every known supervisor after a
+// global concurrency slot freed up; the plan that was starved by the
+// cap retries and launches whatever is now runnable.
+func (c *coordinator) kickSupervisors() {
+	if c.supervisors == nil {
+		return
+	}
+	for _, sup := range c.supervisors.Seq2() {
+		sup.Kick()
+	}
+}
+
 // routeSubPlanComplete closes the supervisor node that owns a finished
 // sub-plan. Stale routes (node restarted or removed meanwhile) are
 // ignored by NodeDone's attempt guard.
@@ -187,7 +200,7 @@ func (l *coordinatorLauncher) runNode(sup *Supervisor, node *PlanNode, mainSessi
 		runErr         error
 		sessionCreated bool
 	)
-	worker, werr := c.buildWorkerAgent(ctx, node.Agent)
+	worker, werr := c.buildWorkerAgent(ctx, node)
 	if werr != nil {
 		runErr = werr
 	} else if _, serr := c.sessions.CreateTaskSession(ctx, node.ChildSessionID, mainSessionID, "plan: "+node.Title); serr != nil {
@@ -242,7 +255,7 @@ func (l *coordinatorLauncher) runVerifier(sup *Supervisor, node *PlanNode, mainS
 		result *fantasy.AgentResult
 		err    error
 	)
-	verifier, verr := c.buildTaskAgent(ctx)
+	verifier, verr := c.buildTaskAgent(ctx, nil)
 	if verr != nil {
 		err = verr
 	} else if _, serr := c.sessions.CreateTaskSession(ctx, childID, mainSessionID, "verify: "+node.Title); serr != nil {
@@ -268,10 +281,19 @@ func (l *coordinatorLauncher) runVerifier(sup *Supervisor, node *PlanNode, mainS
 // read-only task agent; coder nodes get the coder toolset minus the
 // delegation tools, so workers cannot re-orchestrate their own plans.
 // Supervisor nodes keep the plan tool: their job is to author and run
-// a sub-plan of strictly simpler nodes.
-func (c *coordinator) buildWorkerAgent(ctx context.Context, kind string) (SessionAgent, error) {
-	if kind == "task" {
-		return c.buildTaskAgent(ctx)
+// a sub-plan of strictly simpler nodes. Node-level model, temperature,
+// and context window overrides apply to either kind.
+func (c *coordinator) buildWorkerAgent(ctx context.Context, node *PlanNode) (SessionAgent, error) {
+	var ov *modelOverrides
+	if node.Model != "" || node.Temperature != nil || node.ContextWindow > 0 {
+		ov = &modelOverrides{
+			model:         node.Model,
+			temperature:   node.Temperature,
+			contextWindow: node.ContextWindow,
+		}
+	}
+	if node.Agent == "task" {
+		return c.buildTaskAgent(ctx, ov)
 	}
 	agentCfg, ok := c.cfg.Config().Agents[config.AgentCoder]
 	if !ok {
@@ -282,7 +304,7 @@ func (c *coordinator) buildWorkerAgent(ctx context.Context, kind string) (Sessio
 		if t == AgentToolName {
 			continue
 		}
-		if t == PlanToolName && kind != "supervisor" {
+		if t == PlanToolName && node.Agent != "supervisor" {
 			continue
 		}
 		allowed = append(allowed, t)
@@ -292,7 +314,18 @@ func (c *coordinator) buildWorkerAgent(ctx context.Context, kind string) (Sessio
 	if err != nil {
 		return nil, err
 	}
-	return c.buildAgent(ctx, workerPrompt, agentCfg, true)
+	return c.buildAgent(ctx, workerPrompt, agentCfg, true, ov)
+}
+
+// resolveModelRef interprets a node's model reference: "provider/model"
+// when the text before the first slash names a configured provider,
+// otherwise a bare model id (possibly containing slashes, as openrouter
+// ids do) resolved against the base provider.
+func resolveModelRef(ref, baseProvider string, hasProvider func(string) bool) (string, string) {
+	if i := strings.Index(ref, "/"); i > 0 && hasProvider(ref[:i]) {
+		return ref[:i], ref[i+1:]
+	}
+	return baseProvider, ref
 }
 
 // workerPrompt is the node prompt plus a footer framing the claim/

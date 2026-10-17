@@ -22,7 +22,7 @@ const (
 )
 
 func (c *coordinator) agentTool(ctx context.Context) (fantasy.AgentTool, error) {
-	agent, err := c.buildTaskAgent(ctx)
+	agent, err := c.buildTaskAgent(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
