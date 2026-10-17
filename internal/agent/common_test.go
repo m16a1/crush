@@ -147,6 +147,7 @@ func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel
 		TrailerStyle:  "co-authored-by",
 		GeneratedWith: true,
 	}
+	cfg.Config().Options.Orchestration = false
 
 	// Clear some fields to avoid issues with VCR cassette matching.
 	cfg.Config().Options.SkillsPaths = nil

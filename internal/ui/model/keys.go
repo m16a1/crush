@@ -83,6 +83,7 @@ type KeyMap struct {
 	Models      key.Binding
 	Suspend     key.Binding
 	Sessions    key.Binding
+	Plan        key.Binding
 	Tab         key.Binding
 	ToggleYolo  key.Binding
 	ShiftTab    key.Binding
@@ -114,6 +115,10 @@ func DefaultKeyMap() KeyMap {
 		Sessions: key.NewBinding(
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "sessions"),
+		),
+		Plan: key.NewBinding(
+			key.WithKeys("ctrl+e"),
+			key.WithHelp("ctrl+e", "plan"),
 		),
 		Tab: key.NewBinding(
 			key.WithKeys("tab"),

@@ -356,3 +356,113 @@ func TestSupervisorUpdateCycleRollsBack(t *testing.T) {
 	require.Equal(t, 0, sup.find("b").Priority)
 	require.Equal(t, NodeRunning, sup.find("a").State)
 }
+
+func TestSupervisorAgentKindValidation(t *testing.T) {
+	t.Parallel()
+	sup, _, _ := testSupervisor(t, 2)
+
+	// Supervisor nodes are valid at depth 0 and need no files.
+	sv := nodeInput("sub")
+	sv.Agent = "supervisor"
+	require.NoError(t, sup.AddNodes([]PlanNodeInput{sv}))
+	require.Equal(t, "supervisor", sup.find("sub").Agent)
+
+	// verify_cmd and verify_criteria do not apply to supervisor nodes.
+	svBad := nodeInput("sub-bad")
+	svBad.Agent = "supervisor"
+	svBad.VerifyCmd = "true"
+	require.ErrorContains(t, sup.AddNodes([]PlanNodeInput{svBad}), "do not apply")
+
+	// Unknown kinds are still rejected.
+	unknown := nodeInput("u")
+	unknown.Agent = "wizard"
+	require.ErrorContains(t, sup.AddNodes([]PlanNodeInput{unknown}), "unknown agent")
+}
+
+func TestSupervisorSupervisorNodesDepthCapped(t *testing.T) {
+	t.Parallel()
+	deep := &Plan{SessionID: "deep", Depth: maxSupervisionDepth}
+	store := &planStore{dir: t.TempDir()}
+	sup := newSupervisor(deep, store, supervisorHooks{
+		launcher:    &fakeLauncher{},
+		maxParallel: func() int { return 2 },
+	})
+	sup.debounce = time.Hour
+
+	sv := nodeInput("sub")
+	sv.Agent = "supervisor"
+	require.ErrorContains(t, sup.AddNodes([]PlanNodeInput{sv}), "supervision depth")
+
+	// Worker nodes still work at any depth.
+	require.NoError(t, sup.AddNodes([]PlanNodeInput{nodeInput("w")}))
+}
+
+func TestSupervisorFilesRuleExemptsSupervisorNodes(t *testing.T) {
+	t.Parallel()
+	sup, launcher, _ := testSupervisor(t, 2)
+
+	coder := nodeInput("coder")
+	coder.Files = []string{"internal/api/handler.go"}
+	sv := nodeInput("sub")
+	sv.Agent = "supervisor"
+
+	require.NoError(t, sup.AddNodes([]PlanNodeInput{coder, sv}))
+	require.ElementsMatch(t, []string{"coder", "sub"}, launcher.launchedIDs())
+}
+
+func TestSubPlanCompletionClosesSupervisorNode(t *testing.T) {
+	t.Parallel()
+	sup, launcher, wakes := testSupervisor(t, 2)
+
+	sv := nodeInput("build-feature")
+	sv.Agent = "supervisor"
+	require.NoError(t, sup.AddNodes([]PlanNodeInput{sv}))
+	require.Equal(t, NodeRunning, sup.find("build-feature").State)
+	require.Len(t, launcher.launched, 1)
+
+	// A supervisor node's clean turn end does not complete it.
+	sup.NodeDone("build-feature", 1, "sub-plan launched", nil, VerifyEvidence{})
+	require.Equal(t, NodeRunning, sup.find("build-feature").State,
+		"supervisor nodes stay running until their sub-plan completes")
+
+	// The child plan carries the parent linkage; when it completes, the
+	// parent node closes. This mirrors the coordinator's routing hook.
+	child := &Plan{
+		SessionID:         "sub-session",
+		Depth:             1,
+		ParentSessionID:   "main-session",
+		ParentNodeID:      "build-feature",
+		ParentNodeAttempt: 1,
+	}
+	childStore := &planStore{dir: t.TempDir()}
+	childSup := newSupervisor(child, childStore, supervisorHooks{
+		launcher:    &fakeLauncher{},
+		wake:        func(string) {},
+		maxParallel: func() int { return 2 },
+		subPlanComplete: func(p *Plan) {
+			sup.SupervisorNodeComplete(p.ParentNodeID, p.ParentNodeAttempt,
+				"all 1 nodes verified")
+		},
+	})
+	childSup.debounce = time.Hour
+	require.NoError(t, childSup.AddNodes([]PlanNodeInput{nodeInput("x")}))
+	childSup.NodeDone("x", 1, "done", nil, VerifyEvidence{})
+
+	require.Equal(t, NodeVerified, sup.find("build-feature").State)
+	sup.FlushWakes()
+	require.Contains(t, strings.Join(*wakes, "\n"), "build-feature")
+}
+
+func TestSubPlanStaleAttemptIgnored(t *testing.T) {
+	t.Parallel()
+	sup, _, _ := testSupervisor(t, 2)
+
+	sv := nodeInput("sv")
+	sv.Agent = "supervisor"
+	require.NoError(t, sup.AddNodes([]PlanNodeInput{sv}))
+
+	// A completion routed for an old attempt after a restart is stale
+	// and must be ignored.
+	sup.SupervisorNodeComplete("sv", 99, "sub-plan complete")
+	require.Equal(t, NodeRunning, sup.find("sv").State)
+}

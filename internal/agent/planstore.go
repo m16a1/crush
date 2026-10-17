@@ -34,12 +34,26 @@ const (
 )
 
 // Plan is the persisted orchestration state for one mastermind session.
+// Depth 0 is the main session; a plan created by a supervisor node
+// carries its parent linkage so its completion can close the node that
+// spawned it.
 type Plan struct {
 	SessionID   string      `json:"session_id"`
 	MaxParallel int         `json:"max_parallel,omitempty"`
 	BudgetUSD   float64     `json:"budget_usd,omitempty"`
 	Paused      bool        `json:"paused,omitempty"`
 	Nodes       []*PlanNode `json:"nodes"`
+
+	// Depth is this plan's level in the supervision tree. The
+	// mastermind's own plan is depth 0; a plan authored by a supervisor
+	// node is depth 1, and so on.
+	Depth int `json:"depth,omitempty"`
+	// Parent linkage, set only for sub-plans (Depth > 0). When the
+	// sub-plan completes, the parent supervisor is notified so the
+	// supervisor node that owns it is marked done.
+	ParentSessionID   string `json:"parent_session_id,omitempty"`
+	ParentNodeID      string `json:"parent_node_id,omitempty"`
+	ParentNodeAttempt int    `json:"parent_node_attempt,omitempty"`
 
 	// completedNotified guards the single "plan complete" wake-up.
 	CompletedNotified bool `json:"completed_notified,omitempty"`
@@ -53,7 +67,7 @@ type PlanNode struct {
 	ID             string   `json:"id"`
 	Title          string   `json:"title"`
 	Prompt         string   `json:"prompt"`
-	Agent          string   `json:"agent,omitempty"` // "coder" (default) or "task"
+	Agent          string   `json:"agent,omitempty"` // "coder" (default), "task", or "supervisor"
 	DependsOn      []string `json:"depends_on,omitempty"`
 	Priority       int      `json:"priority,omitempty"`
 	VerifyCmd      string   `json:"verify_cmd,omitempty"`
@@ -83,6 +97,15 @@ func (n *PlanNode) Clone() *PlanNode {
 	return &cp
 }
 
+// MaxParallelOrDefault resolves the plan's parallel cap before config
+// clamping; 0 means the default.
+func (p *Plan) MaxParallelOrDefault() int {
+	if p.MaxParallel > 0 {
+		return p.MaxParallel
+	}
+	return defaultMaxParallelSubagents
+}
+
 // MaxRestartsOrDefault resolves the node's restart budget.
 func (n *PlanNode) MaxRestartsOrDefault() int {
 	if n.MaxRestarts == nil {
@@ -108,6 +131,19 @@ func (e VerifyEvidence) Passed() bool { return e.ExitCode == 0 }
 func planChildID(mainSessionID, nodeID string, attempt int) string {
 	sum := sha256.Sum256([]byte(mainSessionID))
 	return fmt.Sprintf("plan-%x-%s-a%d", sum[:6], nodeID, attempt)
+}
+
+// PlansDir returns the directory plan files live in under the data
+// directory. Exported so frontends can locate plan state for rendering.
+func PlansDir(dataDir string) string {
+	return filepath.Join(dataDir, "plans")
+}
+
+// LoadPlanFile reads the persisted plan for a session, or returns nil,
+// nil when none exists. Exported for frontends that render plan state
+// outside the agent package.
+func LoadPlanFile(dataDir, sessionID string) (*Plan, error) {
+	return (&planStore{dir: PlansDir(dataDir)}).load(sessionID)
 }
 
 // planStore persists one Plan JSON document per mastermind session in

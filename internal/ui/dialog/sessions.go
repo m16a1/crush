@@ -74,6 +74,17 @@ func NewSessions(com *common.Common, selectedSessionID string) (*Session, error)
 		return nil, err
 	}
 
+	// Subagent sessions (plan workers, verifiers, agent-tool children)
+	// have a parent; they are inspectable through the plan screen and
+	// tool blocks, not as top-level entries in this list.
+	kept := make([]session.Session, 0, len(sessions))
+	for _, sess := range sessions {
+		if sess.ParentSessionID == "" {
+			kept = append(kept, sess)
+		}
+	}
+	sessions = kept
+
 	s.sessions = sessions
 	for i, sess := range sessions {
 		if sess.ID == selectedSessionID {

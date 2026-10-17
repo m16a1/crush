@@ -17,9 +17,19 @@ as done on evidence (verify_cmd exit code and/or a read-only verifier
 child judging your acceptance criteria). Write prompts as if the worker
 has seen none of this conversation.
 
+Supervision tree: a node with agent=supervisor does not edit code. It
+authors its own sub-plan through the plan tool and runs it, and the
+node completes only when that sub-plan completes. Use this for genuinely
+large sub-tasks - a whole feature with several independent parts - never
+for anything one worker could finish alone. The one rule of the tree:
+every deeper level must receive a strictly SIMPLER, smaller task than
+the level above it. If a sub-task is not clearly simpler than its
+parent, split it into worker nodes yourself instead of delegating the
+delegation. Hierarchy is capped at two levels below you.
+
 Actions:
 - add: create the plan (or extend it). Provide full nodes: id, title,
-  prompt; optionally depends_on, priority, agent (coder|task),
+  prompt; optionally depends_on, priority, agent (coder|task|supervisor),
   verify_cmd, verify_criteria, files, timeout, max_restarts. The DAG
   must be acyclic. Scheduling starts immediately.
 - update: change pending or stalled nodes (prompt, deps, verification,

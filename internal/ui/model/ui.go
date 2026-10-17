@@ -2263,6 +2263,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 	// Session dialog messages.
 	case dialog.ActionSelectSession:
 		m.dialog.CloseDialog(dialog.SessionsID)
+		m.dialog.CloseDialog(dialog.PlanID)
 		cmds = append(cmds, m.loadSession(msg.Session.ID))
 
 	// Open dialog message.
@@ -3244,6 +3245,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			return true
 		case keys.Matches(msg, m.keyMap.Sessions):
 			if cmd := m.openSessionsDialog(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return true
+		case keys.Matches(msg, m.keyMap.Plan):
+			if cmd := m.openPlanDialog(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 			return true
@@ -5619,6 +5625,10 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		if cmd := m.openSessionsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.PlanID:
+		if cmd := m.openPlanDialog(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case dialog.ModelsID:
 		if cmd := m.openModelsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -5766,6 +5776,27 @@ func (m *UI) openSessionsDialog() tea.Cmd {
 	}
 
 	m.dialog.OpenDialog(dialog)
+	return nil
+}
+
+// openPlanDialog opens the plan screen for the current session. It is
+// always openable: without orchestration state it shows an explanatory
+// empty view instead of failing.
+func (m *UI) openPlanDialog() tea.Cmd {
+	if m.dialog.ContainsDialog(dialog.PlanID) {
+		m.dialog.BringToFront(dialog.PlanID)
+		return nil
+	}
+
+	sessionID := ""
+	if m.session != nil {
+		sessionID = m.session.ID
+	}
+	if sessionID == "" {
+		return util.ReportWarn("Open a session first - the plan screen shows one session's plan")
+	}
+
+	m.dialog.OpenDialog(dialog.NewPlan(m.com, sessionID))
 	return nil
 }
 

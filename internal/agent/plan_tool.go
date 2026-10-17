@@ -23,7 +23,7 @@ type PlanNodeInput struct {
 	ID             string   `json:"id" description:"Short unique node id: lowercase alnum with - and _, max 32 chars, e.g. store-flag"`
 	Title          string   `json:"title,omitempty" description:"One-line summary of the node, shown in the plan panel"`
 	Prompt         string   `json:"prompt,omitempty" description:"Full self-contained instructions for the worker executing this node"`
-	Agent          string   `json:"agent,omitempty" description:"Worker toolset: coder (writable, default) or task (read-only research)"`
+	Agent          string   `json:"agent,omitempty" description:"Worker toolset: coder (writable, default), task (read-only research), or supervisor (runs its own sub-plan of simpler nodes; only for genuinely large sub-tasks, max depth 2)"`
 	DependsOn      []string `json:"depends_on,omitempty" description:"Node ids that must be verified before this node may start"`
 	Priority       int      `json:"priority,omitempty" description:"Higher launches first when several nodes are ready (default 0)"`
 	VerifyCmd      string   `json:"verify_cmd,omitempty" description:"Shell command run after the worker finishes; a non-zero exit stalls the node for adjudication"`

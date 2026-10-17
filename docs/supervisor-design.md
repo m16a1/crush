@@ -16,26 +16,37 @@ Implemented (2026-10-16), gated behind `option orchestration true`:
   deadlock and budget detection, debounced event reports.
 - Persistence (`internal/agent/planstore.go`): one JSON document per
   mastermind session under `<datadir>/plans/`, atomically rewritten;
-  running/verifying nodes are returned to pending on restore.
+  running/verifying nodes are returned to pending on restore. There is
+  deliberately no automatic rescheduling on restart: a restored plan
+  waits for the mastermind's next plan-tool action to relaunch.
 - Mastermind tools (`internal/agent/plan_tool.go`): single `plan` tool
   with actions add/update/retry/remove/pause/resume/set_limit/status.
-- Async worker children (`internal/agent/orchestration.go`): coder- or
-  task-toolset workers in real child sessions (titled `plan: <node>`,
-  visible in the session manager), cost rolled up to the mastermind
-  session; wake-ups ride the background-job report -> interrupt/queue
-  path; every wake-up report re-injects the full plan rendering.
+- Async worker children (`internal/agent/orchestration.go`): coder-,
+  task-, or supervisor-toolset workers in real child sessions (titled
+  `plan: <node>`), cost rolled up to the parent session; wake-ups ride
+  the background-job report -> interrupt/queue path; every wake-up
+  report re-injects the full plan rendering.
+- Supervision tree: a node with `agent=supervisor` authors and runs its
+  own sub-plan (depth capped at 2 below the mastermind) and completes
+  only when that sub-plan completes. Pausing or removing a supervisor
+  node pauses its whole subtree. Each deeper level must receive a
+  strictly simpler task - enforced by doctrine and by the depth cap.
+- Plan screen (TUI, `ctrl+e` or the command palette): full-screen view
+  of the current session's plan - node states, attempts, budgets, and
+  per-worker statistics (session cost and average output tokens per
+  second, computed from message history). Enter on a node opens its
+  worker session. Subagent sessions no longer appear in the sessions
+  popup; the plan screen is their front door.
 - Verifier children: read-only task-agent children judging
   `verify_criteria` against claim + evidence, JSON verdict contract.
 - Mastermind turn-death recovery: the Supervisor notices structurally
   (via `noteMainRunEnd`) and restarts the turn with the plan state, up
   to 3 times before escalating once.
-- Coder system prompt gains an `<orchestration>` section when enabled.
-
-Not yet built: the in-chat peek view (open a worker's child session
-from its block / a plan node) and the dedicated plan panel; worker
-sessions are currently inspectable through the session manager.
+- Coder system prompt gains an `<orchestration>` section when enabled,
+  biasing the mastermind toward delegating multi-part work to subagents.
 The Supervisor actor itself is provider-free and covered by
-`internal/agent/supervisor_test.go`.
+`internal/agent/supervisor_test.go`; the plan screen's statistics are
+covered by `internal/ui/dialog/plan_test.go`.
 
 ## Problems this fixes
 
@@ -184,20 +195,21 @@ question, never a lost feature.
 
 ## UI
 
-Three surfaces:
+Implemented surfaces:
 
-1. **Peek view** (opencode parity): open the focused Job/subagent block
-   and render the child session read-only with the existing chat
-   viewport. Live for free: `message.Service` is itself a broker, every
-   part update publishes `UpdatedEvent`; the view just widens its
-   active-session filter to the peeked session ID. Later: type into a
-   peeked subagent (busy sessions already queue follow-up prompts, so
-   steering is a routing line, not a feature).
-2. **Plan panel**: rendering of Supervisor state: nodes and states,
-   slot table, budgets, watchdog countdowns. No model in the loop.
-   Enter on a node peeks its child session.
-3. **Session manager**: indent child sessions under the parent with a
-   live busy dot, so the fleet is visible without the plan panel.
+1. **Plan screen** (`ctrl+e` / command palette): the current session's
+   plan rendered full-screen - node badges, states, attempts, budgets,
+   and per-worker stats (cost, avg output tokens/sec). Enter on a node
+   switches into its worker session for live inspection; workers are
+   real sessions, so message streaming makes the view live.
+2. **Sessions popup**: subagent sessions (parented sessions) are
+   filtered out; the plan screen is their entry point.
+
+Deferred:
+
+- In-chat peek view that opens a worker session without leaving the
+  conversation (opencode parity). Typing into a peeked subagent later.
+- Hierarchical session manager grouping children under parents.
 
 The existing nested rendering in the chat (agent tool blocks with
 embedded child tools) stays as the collapsed summary; the peek is for

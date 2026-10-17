@@ -464,6 +464,13 @@ func (c *Commands) defaultCommands() []*CommandItem {
 			NewCommandItem(c.com.Styles, "regenerate_title", "Regenerate Title", "", ActionRegenerateTitle{SessionID: c.sessionID}).WithAliases("retitle"),
 			NewCommandItem(c.com.Styles, "export_session", "Export Session", "", ActionExportSession{SessionID: c.sessionID}).WithAliases("markdown"),
 		)
+
+		// The plan screen only means something when orchestration is on.
+		if cfg := c.com.Config(); cfg != nil && cfg.Options != nil && cfg.Options.Orchestration {
+			commands = append(commands,
+				NewCommandItem(c.com.Styles, "plan_screen", "Plan Screen", "ctrl+e", ActionOpenDialog{PlanID}).WithAliases("plan"),
+			)
+		}
 	}
 
 	// Add reasoning toggle for models that support it

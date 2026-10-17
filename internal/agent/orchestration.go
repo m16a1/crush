@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -31,6 +30,9 @@ const evidenceTailBytes = 4096
 //go:embed templates/plan_worker_footer.md
 var planWorkerFooter string
 
+//go:embed templates/plan_supervisor_footer.md
+var planSupervisorFooter string
+
 //go:embed templates/plan_verifier.md
 var planVerifierTmpl string
 
@@ -48,7 +50,7 @@ func (c *coordinator) supervisorFor(sessionID string) (*Supervisor, error) {
 	if sup, ok := c.supervisors.Get(sessionID); ok {
 		return sup, nil
 	}
-	store := &planStore{dir: filepath.Join(c.cfg.Config().Options.DataDirectory, "plans")}
+	store := &planStore{dir: PlansDir(c.cfg.Config().Options.DataDirectory)}
 	plan, err := store.load(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load plan: %w", err)
@@ -73,6 +75,17 @@ func (c *coordinator) supervisorFor(sessionID string) (*Supervisor, error) {
 				return n
 			}
 			return defaultMaxParallelSubagents
+		},
+		// Both hierarchy hooks run on their own goroutine: they cross
+		// between two Supervisors, each with its own mutex, and calling
+		// synchronously could nest the locks in opposite orders.
+		killSubPlan: func(childSessionID string) {
+			if sub, ok := c.supervisors.Get(childSessionID); ok {
+				go sub.Pause()
+			}
+		},
+		subPlanComplete: func(p *Plan) {
+			go c.routeSubPlanComplete(p)
 		},
 	})
 	c.supervisors.Set(sessionID, sup)
@@ -125,11 +138,49 @@ func (l *coordinatorLauncher) VerifyNode(sup *Supervisor, node *PlanNode, mainSe
 	go l.runVerifier(sup, node, mainSessionID, evidence)
 }
 
+// routeSubPlanComplete closes the supervisor node that owns a finished
+// sub-plan. Stale routes (node restarted or removed meanwhile) are
+// ignored by NodeDone's attempt guard.
+func (c *coordinator) routeSubPlanComplete(p *Plan) {
+	if p == nil || p.ParentSessionID == "" || p.ParentNodeID == "" {
+		return
+	}
+	parent, ok := c.supervisors.Get(p.ParentSessionID)
+	if !ok {
+		return
+	}
+	// Roll the sub-plan's accumulated spend into the parent session
+	// once, at completion. (Supervisor nodes skip the per-turn roll-up
+	// because their cost accrues over the whole subtree's lifetime.)
+	if err := c.updateParentSessionCost(context.WithoutCancel(c.baseCtx), p.SessionID, p.ParentSessionID); err != nil {
+		slog.Debug("Failed to roll up sub-plan cost", "sub_session", p.SessionID, "error", err)
+	}
+	parent.NodeDone(p.ParentNodeID, p.ParentNodeAttempt,
+		fmt.Sprintf("sub-plan complete: all %d nodes verified", len(p.Nodes)), nil, VerifyEvidence{})
+}
+
 func (l *coordinatorLauncher) runNode(sup *Supervisor, node *PlanNode, mainSessionID string) {
 	c := l.c
 	ctx, cancel := context.WithCancel(context.WithoutCancel(c.baseCtx))
 	defer cancel()
 	sup.AttachCancel(node.ID, node.Attempts, cancel)
+
+	// Supervisor nodes seed their sub-plan file before the first turn
+	// so the child session's supervisorFor loads the parent linkage
+	// and depth instead of starting a root plan.
+	if node.Agent == "supervisor" {
+		seed := &Plan{
+			SessionID:         node.ChildSessionID,
+			Depth:             sup.Depth() + 1,
+			ParentSessionID:   mainSessionID,
+			ParentNodeID:      node.ID,
+			ParentNodeAttempt: node.Attempts,
+		}
+		if err := (&planStore{dir: PlansDir(c.cfg.Config().Options.DataDirectory)}).save(seed); err != nil {
+			sup.NodeDone(node.ID, node.Attempts, "", fmt.Errorf("seed sub-plan: %w", err), VerifyEvidence{})
+			return
+		}
+	}
 
 	var (
 		result         *fantasy.AgentResult
@@ -148,10 +199,30 @@ func (l *coordinatorLauncher) runNode(sup *Supervisor, node *PlanNode, mainSessi
 		c.untrackSubAgentRun(node.ChildSessionID)
 	}
 
-	if sessionCreated {
+	if sessionCreated && (runErr != nil || node.Agent != "supervisor") {
 		if cerr := c.updateParentSessionCost(context.WithoutCancel(ctx), node.ChildSessionID, mainSessionID); cerr != nil {
 			slog.Debug("Failed to update parent session cost", "child_session", node.ChildSessionID, "error", cerr)
 		}
+	}
+
+	if node.Agent == "supervisor" {
+		// A supervisor node's completion is its sub-plan completing,
+		// routed back via routeSubPlanComplete. A clean turn end only
+		// means the sub-plan exists; a turn error, or a turn that ends
+		// without authoring any sub-nodes, fails the node.
+		if runErr == nil {
+			sub, err := LoadPlanFile(c.cfg.Config().Options.DataDirectory, node.ChildSessionID)
+			switch {
+			case err != nil:
+				runErr = fmt.Errorf("read sub-plan: %w", err)
+			case sub == nil || len(sub.Nodes) == 0:
+				runErr = errors.New("supervisor node ended its turn without creating a sub-plan; it must use the plan tool to break its task into simpler nodes")
+			}
+		}
+		if runErr != nil {
+			sup.NodeDone(node.ID, node.Attempts, subAgentOutput(result), runErr, VerifyEvidence{})
+		}
+		return
 	}
 
 	evidence := VerifyEvidence{Cmd: node.VerifyCmd}
@@ -196,6 +267,8 @@ func (l *coordinatorLauncher) runVerifier(sup *Supervisor, node *PlanNode, mainS
 // buildWorkerAgent builds a plan-node worker. Task nodes get the
 // read-only task agent; coder nodes get the coder toolset minus the
 // delegation tools, so workers cannot re-orchestrate their own plans.
+// Supervisor nodes keep the plan tool: their job is to author and run
+// a sub-plan of strictly simpler nodes.
 func (c *coordinator) buildWorkerAgent(ctx context.Context, kind string) (SessionAgent, error) {
 	if kind == "task" {
 		return c.buildTaskAgent(ctx)
@@ -206,7 +279,10 @@ func (c *coordinator) buildWorkerAgent(ctx context.Context, kind string) (Sessio
 	}
 	allowed := make([]string, 0, len(agentCfg.AllowedTools))
 	for _, t := range agentCfg.AllowedTools {
-		if t == AgentToolName || t == PlanToolName {
+		if t == AgentToolName {
+			continue
+		}
+		if t == PlanToolName && kind != "supervisor" {
 			continue
 		}
 		allowed = append(allowed, t)
@@ -220,8 +296,12 @@ func (c *coordinator) buildWorkerAgent(ctx context.Context, kind string) (Sessio
 }
 
 // workerPrompt is the node prompt plus a footer framing the claim/
-// verification protocol for the worker.
+// verification protocol for the worker. Supervisor nodes get a
+// different footer: they author a sub-plan instead of editing code.
 func workerPrompt(node *PlanNode) string {
+	if node.Agent == "supervisor" {
+		return node.Prompt + fmt.Sprintf("\n\n"+planSupervisorFooter, node.ID)
+	}
 	return node.Prompt + fmt.Sprintf("\n\n"+planWorkerFooter, node.ID)
 }
 

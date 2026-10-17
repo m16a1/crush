@@ -25,6 +25,18 @@ const defaultMaxParallelSubagents = 2
 // short window into a single mastermind wake-up turn. Tests shorten it.
 const defaultWakeDebounce = 3 * time.Second
 
+// maxSupervisionDepth bounds the supervision tree: the mastermind's own
+// plan is depth 0, a supervisor node's sub-plan is depth 1, and a
+// sub-plan of a sub-plan is depth 2. Plans at or beyond the cap cannot
+// spawn further supervisor nodes, so hierarchy growth is bounded.
+const maxSupervisionDepth = 2
+
+// validNodeAgents reports whether an agent kind is known. Supervisor
+// nodes are additionally depth-gated at add time.
+func validNodeAgent(kind string) bool {
+	return kind == "coder" || kind == "task" || kind == "supervisor"
+}
+
 var planNodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // PlanNodeLauncher starts and verifies plan nodes. The coordinator
@@ -46,6 +58,13 @@ type supervisorHooks struct {
 	wake        func(report string)
 	spent       func() float64
 	maxParallel func() int
+	// killSubPlan pauses the sub-plan owned by a supervisor node's
+	// child session, so pausing or removing the node stops the whole
+	// subtree. Nil in tests without hierarchy.
+	killSubPlan func(childSessionID string)
+	// subPlanComplete is invoked once when a sub-plan finishes; the
+	// coordinator routes it to the parent supervisor as NodeDone.
+	subPlanComplete func(plan *Plan)
 }
 
 // nodeRun tracks a live node launch so the watchdog and kill paths can
@@ -122,8 +141,16 @@ func (s *Supervisor) AddNodes(inputs []PlanNodeInput) error {
 		if strings.TrimSpace(in.Prompt) == "" {
 			return fmt.Errorf("node %q requires a prompt", in.ID)
 		}
-		if in.Agent != "" && in.Agent != "coder" && in.Agent != "task" {
-			return fmt.Errorf("node %q has unknown agent %q (expected coder or task)", in.ID, in.Agent)
+		if in.Agent != "" && !validNodeAgent(in.Agent) {
+			return fmt.Errorf("node %q has unknown agent %q (expected coder, task, or supervisor)", in.ID, in.Agent)
+		}
+		if in.Agent == "supervisor" {
+			if s.plan.Depth >= maxSupervisionDepth {
+				return fmt.Errorf("node %q cannot be a supervisor: this plan is already at supervision depth %d (max %d). Break the task into worker nodes yourself instead", in.ID, s.plan.Depth, maxSupervisionDepth)
+			}
+			if in.VerifyCmd != "" || in.VerifyCriteria != "" {
+				return fmt.Errorf("node %q is a supervisor: verify_cmd and verify_criteria do not apply; the node completes when its sub-plan completes", in.ID)
+			}
 		}
 	}
 	// Dependencies may reference existing nodes or other nodes in this
@@ -193,6 +220,12 @@ func (s *Supervisor) UpdateNodes(inputs []PlanNodeInput) error {
 		if n.State != NodePending && n.State != NodeStalled {
 			return fmt.Errorf("node %q is %s; only pending or stalled nodes can be updated", n.ID, n.State)
 		}
+		if in.Agent != "" && !validNodeAgent(in.Agent) {
+			return fmt.Errorf("node %q has unknown agent %q (expected coder, task, or supervisor)", in.ID, in.Agent)
+		}
+		if in.Agent == "supervisor" && s.plan.Depth >= maxSupervisionDepth {
+			return fmt.Errorf("node %q cannot become a supervisor: this plan is already at supervision depth %d (max %d)", in.ID, s.plan.Depth, maxSupervisionDepth)
+		}
 	}
 	for _, in := range inputs {
 		for _, dep := range in.DependsOn {
@@ -216,7 +249,7 @@ func (s *Supervisor) UpdateNodes(inputs []PlanNodeInput) error {
 		if strings.TrimSpace(in.Prompt) != "" {
 			n.Prompt = in.Prompt
 		}
-		if in.Agent == "coder" || in.Agent == "task" {
+		if in.Agent == "coder" || in.Agent == "task" || in.Agent == "supervisor" {
 			n.Agent = in.Agent
 		}
 		if in.DependsOn != nil {
@@ -303,6 +336,9 @@ func (s *Supervisor) RemoveNodes(ids []string) error {
 			return false
 		}
 		s.killLocked(n)
+		if n.Agent == "supervisor" {
+			s.killSubPlanTree(n.ChildSessionID)
+		}
 		return true
 	})
 	s.deadlockEscalated = false
@@ -320,6 +356,9 @@ func (s *Supervisor) Pause() {
 	for _, n := range s.plan.Nodes {
 		if n.State == NodeRunning || n.State == NodeVerifying {
 			s.killLocked(n)
+			if n.Agent == "supervisor" {
+				s.killSubPlanTree(n.ChildSessionID)
+			}
 			n.State = NodePending
 			n.UpdatedAt = s.now()
 		}
@@ -378,6 +417,13 @@ func (s *Supervisor) NodeDone(nodeID string, attempt int, claim string, runErr e
 	s.stopRunLocked(nodeID)
 	n.UpdatedAt = s.now()
 
+	// A supervisor node's clean turn end is not completion: its sub-plan
+	// finishing is, and that arrives via SupervisorNodeComplete. Only
+	// failures flow through here.
+	if n.Agent == "supervisor" && runErr == nil {
+		return
+	}
+
 	switch {
 	case runErr != nil:
 		s.failLocked(n, runErr.Error())
@@ -400,6 +446,26 @@ func (s *Supervisor) NodeDone(nodeID string, attempt int, claim string, runErr e
 		s.enqueueWakeLocked(fmt.Sprintf("Node %q finished and verified (no evidence configured beyond the claim).", n.ID))
 	}
 
+	s.saveLocked()
+	s.scheduleLocked()
+	s.flushWakesSoonLocked()
+}
+
+// SupervisorNodeComplete marks a running supervisor node verified
+// because its sub-plan completed. Stale reports are ignored.
+func (s *Supervisor) SupervisorNodeComplete(nodeID string, attempt int, claim string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.find(nodeID)
+	if n == nil || n.State != NodeRunning || n.Attempts != attempt || n.Agent != "supervisor" {
+		return
+	}
+	s.stopRunLocked(nodeID)
+	n.UpdatedAt = s.now()
+	n.LastResult = claim
+	n.LastEvidence = claim
+	n.State = NodeVerified
+	s.enqueueWakeLocked(fmt.Sprintf("Node %q completed: its sub-plan finished (%s).", n.ID, firstLine(claim)))
 	s.saveLocked()
 	s.scheduleLocked()
 	s.flushWakesSoonLocked()
@@ -511,13 +577,14 @@ func (s *Supervisor) readyLocked(n *PlanNode) bool {
 }
 
 // filesFreeLocked enforces the disjoint-files rule: two concurrently
-// running writable nodes may not declare overlapping paths.
+// running writable nodes may not declare overlapping paths. Task and
+// supervisor nodes do not edit files, so they are exempt.
 func (s *Supervisor) filesFreeLocked(n *PlanNode) bool {
-	if len(n.Files) == 0 || n.Agent == "task" {
+	if len(n.Files) == 0 || n.Agent == "task" || n.Agent == "supervisor" {
 		return true
 	}
 	for _, r := range s.plan.Nodes {
-		if r.State != NodeRunning || r.Agent == "task" || len(r.Files) == 0 {
+		if r.State != NodeRunning || r.Agent == "task" || r.Agent == "supervisor" || len(r.Files) == 0 {
 			continue
 		}
 		if pathsOverlap(n.Files, r.Files) {
@@ -656,6 +723,9 @@ func (s *Supervisor) checkBudgetLocked() {
 	for _, n := range s.plan.Nodes {
 		if n.State == NodeRunning || n.State == NodeVerifying {
 			s.killLocked(n)
+			if n.Agent == "supervisor" {
+				s.killSubPlanTree(n.ChildSessionID)
+			}
 			n.State = NodePending
 		}
 	}
@@ -713,6 +783,9 @@ func (s *Supervisor) checkCompleteLocked() {
 	}
 	s.plan.CompletedNotified = true
 	s.enqueueWakeLocked(fmt.Sprintf("Plan complete: all %d nodes verified.", len(s.plan.Nodes)))
+	if s.plan.Depth > 0 && s.plan.ParentSessionID != "" && s.hooks.subPlanComplete != nil {
+		s.hooks.subPlanComplete(s.plan)
+	}
 }
 
 func (s *Supervisor) allDoneLocked() bool {
@@ -725,6 +798,24 @@ func (s *Supervisor) allDoneLocked() bool {
 		}
 	}
 	return true
+}
+
+// Depth returns this plan's level in the supervision tree: 0 for the
+// mastermind's own plan, 1+ for sub-plans authored by supervisor nodes.
+func (s *Supervisor) Depth() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.plan.Depth
+}
+
+// killSubPlanTree pauses the sub-plan owned by a supervisor node's
+// child session, if one exists, so killing the node stops the whole
+// subtree and not just the supervisor's own turn.
+func (s *Supervisor) killSubPlanTree(childSessionID string) {
+	if childSessionID == "" || s.hooks.killSubPlan == nil {
+		return
+	}
+	s.hooks.killSubPlan(childSessionID)
 }
 
 // findCycleLocked returns any node ID inside a dependency cycle, or "".
@@ -819,6 +910,12 @@ func (s *Supervisor) renderLocked() string {
 	var ready, stalled, verified []string
 	for _, n := range s.plan.Nodes {
 		line := fmt.Sprintf("  [%s] %-10s %s", n.ID, n.State, n.Title)
+		switch n.Agent {
+		case "task":
+			line += " (task)"
+		case "supervisor":
+			line += " (supervisor)"
+		}
 		switch n.State {
 		case NodeRunning:
 			fmt.Fprintf(&sb, "%s (attempt %d, restarts %d/%d, child %s)\n", line, n.Attempts, n.Restarts, n.MaxRestartsOrDefault(), n.ChildSessionID)
